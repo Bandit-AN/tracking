@@ -103,8 +103,10 @@ export function Dashboard() {
   const [clientId, setClientId] = useState(1);
   const [range, setRange] = useState("Last 30 days");
   const [tab, setTab] = useState("Overview");
+  const [activeNav, setActiveNav] = useState("Dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [clientMenu, setClientMenu] = useState(false);
+  const [actionMenu, setActionMenu] = useState(false);
   const [modal, setModal] = useState<"client" | "member" | null>(null);
   const [toast, setToast] = useState("");
   const [newName, setNewName] = useState("");
@@ -140,10 +142,36 @@ export function Dashboard() {
     setModal(null); notify(`Invite sent to ${email}`); setEmail("");
   }
 
+  function exportReport() {
+    const rows = [
+      ["Closer", "Calls due", "Calls taken", "Calls closed", "Close rate", "Cash collected", "Revenue"],
+      ...people.map((p) => [p.name, p.calls, p.taken, p.closed, `${Math.round(p.closed / p.taken * 100)}%`, p.cash, p.revenue]),
+    ];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${client.name.toLowerCase().replaceAll(" ", "-")}-${range.toLowerCase().replaceAll(" ", "-")}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notify("Sales report exported");
+  }
+
+  function selectNav(item: string) {
+    setActiveNav(item);
+    setSidebarOpen(false);
+    if (item === "Dashboard") setTab("Overview");
+    if (item === "Payments") setTab("Payments");
+    if (item === "Media KPIs") setTab("Media KPIs");
+    if (item === "Sales") { setTab("Overview"); notify("Sales performance view opened"); }
+    if (item === "Team members") setModal("member");
+    if (item === "Settings") notify("Workspace settings opened");
+  }
+
   return (
     <main className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-        <div className="brand"><span className="brand-mark"><b /><b /><b /></span><span>Metricly</span></div>
+        <div className="brand"><span className="brand-mark"><img src="/moonrift-logo.png" alt="" /></span><span>MoonRift</span></div>
         <div className="workspace-label">WORKSPACE</div>
         <button className="client-select" onClick={() => setClientMenu(!clientMenu)}>
           <span className="client-avatar" style={{ background: client.color }}>{client.initials}</span>
@@ -154,17 +182,21 @@ export function Dashboard() {
           <button className="new-client" onClick={() => { setModal("client"); setClientMenu(false); }}>＋ New subaccount</button>
         </div>}
         <nav>
-          <a className="active"><span>▦</span> Dashboard</a>
-          <a><span>◫</span> Sales</a>
-          <a><span>♢</span> Payments</a>
-          <a><span>◎</span> Media KPIs</a>
+          {[
+            ["Dashboard", "▦"],
+            ["Sales", "◫"],
+            ["Payments", "♢"],
+            ["Media KPIs", "◎"],
+          ].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}
           <div className="nav-line" />
-          <a><span>♙</span> Team members</a>
-          <a><span>⚙</span> Settings</a>
+          {[
+            ["Team members", "♙"],
+            ["Settings", "⚙"],
+          ].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}
         </nav>
         <div className="sidebar-bottom">
-          <button className="help"><span>?</span><div><strong>Need help?</strong><small>Visit the help center</small></div></button>
-          <div className="profile"><span>JS</span><div><strong>Jordan Smith</strong><small>Workspace admin</small></div><button>⋮</button></div>
+          <button className="help" onClick={() => notify("Help center opened")}><span>?</span><div><strong>Need help?</strong><small>Visit the help center</small></div></button>
+          <div className="profile"><span>JS</span><div><strong>Jordan Smith</strong><small>Workspace admin</small></div><button aria-label="Open profile menu" onClick={() => notify("Profile menu opened")}>⋮</button></div>
         </div>
       </aside>
       {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
@@ -174,7 +206,7 @@ export function Dashboard() {
           <button className="menu-btn" onClick={() => setSidebarOpen(true)}>☰</button>
           <div className="crumb"><span>Dashboards</span><b>/</b><strong>Sales performance</strong></div>
           <div className="top-actions">
-            <button className="icon-btn" aria-label="Notifications">♢<i /></button>
+            <button className="icon-btn" aria-label="Notifications" onClick={() => notify("You’re all caught up")}>♢<i /></button>
             <button className="invite-btn" onClick={() => setModal("member")}>＋ Invite member</button>
           </div>
         </header>
@@ -182,7 +214,9 @@ export function Dashboard() {
         <div className="dashboard">
           <div className="page-title">
             <div><h1>{client.name} <span>Sales Report</span></h1><p>Track revenue, calls, and team performance in one place.</p></div>
-            <div className="title-actions"><button>⇩ <span>Export</span></button><button>⋯</button></div>
+            <div className="title-actions"><button onClick={exportReport}>⇩ <span>Export</span></button><button aria-label="More dashboard actions" onClick={() => setActionMenu(!actionMenu)}>⋯</button>
+              {actionMenu && <div className="action-menu"><button onClick={() => { setActionMenu(false); notify("Dashboard link copied"); navigator.clipboard?.writeText(window.location.href); }}>Copy dashboard link</button><button onClick={() => { setActionMenu(false); notify("Dashboard duplicated"); }}>Duplicate dashboard</button><button onClick={() => { setActionMenu(false); setModal("member"); }}>Manage access</button></div>}
+            </div>
           </div>
 
           <div className="tabs">
@@ -205,7 +239,7 @@ export function Dashboard() {
               {kpis.map((k, i) => <article className="kpi" key={k.label}><div className="kpi-top"><span>{k.label}</span><small className={k.up ? "up" : "down"}>{k.up ? "↗" : "↘"} {k.change}</small></div><strong>{i === 0 ? scaled.cash : i === 1 ? scaled.revenue : k.value}</strong><Spark values={k.spark} up={k.up} /></article>)}
             </div>
             <article className="table-card">
-              <div className="section-head"><div><h2>Closer performance</h2><p>Individual sales activity and outcomes</p></div><button>View full report →</button></div>
+              <div className="section-head"><div><h2>Closer performance</h2><p>Individual sales activity and outcomes</p></div><button onClick={() => notify("Full closer report opened")}>View full report →</button></div>
               <div className="table-wrap"><table><thead><tr><th>Closer</th><th>Calls due</th><th>Calls taken</th><th>Calls closed</th><th>Close rate</th><th>Cash collected</th><th>Revenue</th></tr></thead><tbody>
                 {people.map((p, i) => <tr key={p.name}><td><span className={`person p${i}`}>{p.name.split(" ").map((n) => n[0]).join("")}</span><div><b>{p.name}</b><small>{p.role}</small></div></td><td>{p.calls}</td><td>{p.taken}</td><td>{p.closed}</td><td><span className="rate">{Math.round(p.closed / p.taken * 100)}%</span></td><td>{money(p.cash)}</td><td>{money(p.revenue)}</td></tr>)}
               </tbody></table></div>

@@ -12,11 +12,11 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
   const image = `${protocol}://${host}/og.png`;
   return {
-    title: "Metricly — Client Revenue Intelligence",
+    title: "MoonRift — Client Revenue Intelligence",
     description: "A modern multi-client sales and revenue performance dashboard.",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title: "Metricly", description: "Every client. One clear view.", images: [{ url: image, width: 1792, height: 915 }] },
-    twitter: { card: "summary_large_image", title: "Metricly", description: "Every client. One clear view.", images: [image] },
+    openGraph: { title: "MoonRift", description: "Every client. One clear view.", images: [{ url: image, width: 1792, height: 915 }] },
+    twitter: { card: "summary_large_image", title: "MoonRift", description: "Every client. One clear view.", images: [image] },
   };
 }
 
