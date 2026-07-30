@@ -4,6 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 type Client = { id: number; name: string; industry: string; initials: string; color: string };
 type Person = { name: string; role: string; calls: number; taken: number; closed: number; cash: number; revenue: number };
+type SheetMetrics = {
+  booked: number; taken: number; closed: number; showRate: number; closeRate: number;
+  revenue: number; cash: number; contracted: number; people: Person[]; updatedAt: Date;
+};
 
 const clientsSeed: Client[] = [
   { id: 1, name: "Apex Consulting", industry: "Business coaching", initials: "AC", color: "#7646ff" },
@@ -24,6 +28,25 @@ const revenueSeries = [22, 31, 47, 72, 65, 55, 49, 63, 79, 71, 88, 102];
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
+
+function parseCsv(text: string) {
+  const rows: string[][] = []; let row: string[] = []; let cell = ""; let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (quoted && text[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted;
+    } else if (char === "," && !quoted) { row.push(cell); cell = ""; }
+    else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell); if (row.some(Boolean)) rows.push(row); row = []; cell = "";
+    } else cell += char;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+const numeric = (value = "") => Number(value.replace(/[$,%\s,]/g, "")) || 0;
+const sheetIdFromUrl = (value: string) => value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1] ?? value.trim();
 
 function Chart({ data, color, fill, label, total }: { data: number[]; color: string; fill: string; label: string; total: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -107,10 +130,15 @@ export function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [clientMenu, setClientMenu] = useState(false);
   const [actionMenu, setActionMenu] = useState(false);
-  const [modal, setModal] = useState<"client" | "member" | null>(null);
+  const [modal, setModal] = useState<"client" | "member" | "sheet" | null>(null);
   const [toast, setToast] = useState("");
   const [newName, setNewName] = useState("");
   const [email, setEmail] = useState("");
+  const apexSheet = "https://docs.google.com/spreadsheets/d/1ahyY64u9uYmcEDFi1XAJRFmnZ_gX_6VQHUnWvswkvmg/edit?usp=sharing";
+  const [sheetUrls, setSheetUrls] = useState<Record<number, string>>({ 1: apexSheet });
+  const [sheetUrl, setSheetUrl] = useState(apexSheet);
+  const [sheetData, setSheetData] = useState<SheetMetrics | null>(null);
+  const [sheetStatus, setSheetStatus] = useState<"idle" | "loading" | "connected" | "error">("idle");
   const client = clients.find((c) => c.id === clientId)!;
 
   const scaled = useMemo(() => {
@@ -122,6 +150,39 @@ export function Dashboard() {
       revenueSeries: revenueSeries.map((v) => v * factor),
     };
   }, [clientId]);
+
+  async function loadSheet(url = sheetUrls[clientId]) {
+    if (!url) { setSheetData(null); setSheetStatus("idle"); return; }
+    setSheetStatus("loading");
+    try {
+      const id = sheetIdFromUrl(url);
+      const getSheet = async (sheet: string) => {
+        const response = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(id)}&sheet=${encodeURIComponent(sheet)}`);
+        if (!response.ok) throw new Error("Unable to read sheet");
+        return parseCsv(await response.text());
+      };
+      const overview = await getSheet("System Overview");
+      const totalsHeader = overview.findIndex((row) => row.some((cell) => cell.includes("Meetings Booked")));
+      const totals = totalsHeader >= 0 ? overview[totalsHeader + 1] ?? [] : [];
+      const closerHeader = overview.findIndex((row) => row[0] === "Closer Name");
+      const closerRows = closerHeader >= 0 ? overview.slice(closerHeader + 1).filter((row) => row[0] && row[0] !== "Operator") : [];
+      setSheetData({
+        booked: numeric(totals[0]), taken: numeric(totals[1]), closed: numeric(totals[2]),
+        showRate: numeric(totals[3]), closeRate: numeric(totals[4]), revenue: numeric(totals[5]),
+        cash: numeric(totals[6]), contracted: numeric(totals[7]),
+        people: closerRows.map((row) => ({
+          name: row[0], role: "Closer", calls: numeric(row[1]), taken: numeric(row[1]),
+          closed: numeric(row[2]), revenue: numeric(row[4]), cash: numeric(row[5]),
+        })),
+        updatedAt: new Date(),
+      });
+      setSheetStatus("connected");
+    } catch {
+      setSheetStatus("error"); setSheetData(null);
+    }
+  }
+
+  useEffect(() => { void loadSheet(); }, [clientId]);
 
   function notify(text: string) {
     setToast(text); window.setTimeout(() => setToast(""), 2800);
@@ -166,6 +227,14 @@ export function Dashboard() {
     if (item === "Sales") { setTab("Overview"); notify("Sales performance view opened"); }
     if (item === "Team members") setModal("member");
     if (item === "Settings") notify("Workspace settings opened");
+    if (item === "Data sources") { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }
+  }
+
+  function connectSheet(e: React.FormEvent) {
+    e.preventDefault();
+    if (!sheetIdFromUrl(sheetUrl)) return;
+    setSheetUrls((items) => ({ ...items, [clientId]: sheetUrl }));
+    setModal(null); void loadSheet(sheetUrl); notify(`Google Sheet connected to ${client.name}`);
   }
 
   return (
@@ -191,6 +260,7 @@ export function Dashboard() {
           <div className="nav-line" />
           {[
             ["Team members", "♙"],
+            ["Data sources", "⌁"],
             ["Settings", "⚙"],
           ].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}
         </nav>
@@ -227,21 +297,27 @@ export function Dashboard() {
             <div><label>Setter</label><select><option>All setters</option><option>Maya Torres</option><option>Chris Green</option></select></div>
             <div><label>Closer</label><select><option>All closers</option>{people.map((p) => <option key={p.name}>{p.name}</option>)}</select></div>
             <div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option></select></div>
-            <button className="refresh" onClick={() => notify("Dashboard data refreshed")}>↻</button>
+            <button className="refresh" onClick={() => { void loadSheet(); notify("Dashboard data refreshed"); }}>↻</button>
+            <button className={`sheet-pill ${sheetStatus}`} onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}>
+              <span>●</span>{sheetStatus === "loading" ? "Syncing…" : sheetStatus === "connected" ? "Google Sheets live" : sheetStatus === "error" ? "Sheet error" : "Connect sheet"}
+            </button>
           </div>
 
           {tab === "Overview" ? <>
             <div className="charts">
-              <Chart data={scaled.cashSeries} color="#6442e8" fill="rgba(100,66,232,.25)" label="Cash collected" total={scaled.cash} />
-              <Chart data={scaled.revenueSeries} color="#008e7d" fill="rgba(0,142,125,.22)" label="Revenue generated" total={scaled.revenue} />
+              <Chart data={scaled.cashSeries.map((v) => sheetData ? v * Math.max(sheetData.cash / 185500, .08) : v)} color="#6442e8" fill="rgba(100,66,232,.25)" label="Cash collected" total={sheetData ? money(sheetData.cash) : scaled.cash} />
+              <Chart data={scaled.revenueSeries.map((v) => sheetData ? v * Math.max(sheetData.revenue / 297600, .08) : v)} color="#008e7d" fill="rgba(0,142,125,.22)" label="Revenue generated" total={sheetData ? money(sheetData.revenue) : scaled.revenue} />
             </div>
             <div className="kpi-grid">
-              {kpis.map((k, i) => <article className="kpi" key={k.label}><div className="kpi-top"><span>{k.label}</span><small className={k.up ? "up" : "down"}>{k.up ? "↗" : "↘"} {k.change}</small></div><strong>{i === 0 ? scaled.cash : i === 1 ? scaled.revenue : k.value}</strong><Spark values={k.spark} up={k.up} /></article>)}
+              {kpis.map((k, i) => {
+                const live = sheetData ? [money(sheetData.cash), money(sheetData.revenue), String(sheetData.booked), String(sheetData.taken), `${sheetData.showRate.toFixed(2)}%`, `${sheetData.closeRate.toFixed(2)}%`, money(sheetData.taken ? sheetData.cash / sheetData.taken : 0), money(sheetData.closed ? sheetData.contracted / sheetData.closed : 0)][i] : null;
+                return <article className="kpi" key={k.label}><div className="kpi-top"><span>{k.label}</span><small className={sheetData ? "live" : k.up ? "up" : "down"}>{sheetData ? "● LIVE" : `${k.up ? "↗" : "↘"} ${k.change}`}</small></div><strong>{live ?? (i === 0 ? scaled.cash : i === 1 ? scaled.revenue : k.value)}</strong><Spark values={k.spark} up={k.up} /></article>;
+              })}
             </div>
             <article className="table-card">
               <div className="section-head"><div><h2>Closer performance</h2><p>Individual sales activity and outcomes</p></div><button onClick={() => notify("Full closer report opened")}>View full report →</button></div>
               <div className="table-wrap"><table><thead><tr><th>Closer</th><th>Calls due</th><th>Calls taken</th><th>Calls closed</th><th>Close rate</th><th>Cash collected</th><th>Revenue</th></tr></thead><tbody>
-                {people.map((p, i) => <tr key={p.name}><td><span className={`person p${i}`}>{p.name.split(" ").map((n) => n[0]).join("")}</span><div><b>{p.name}</b><small>{p.role}</small></div></td><td>{p.calls}</td><td>{p.taken}</td><td>{p.closed}</td><td><span className="rate">{Math.round(p.closed / p.taken * 100)}%</span></td><td>{money(p.cash)}</td><td>{money(p.revenue)}</td></tr>)}
+                {(sheetData?.people.length ? sheetData.people : people).map((p, i) => <tr key={p.name}><td><span className={`person p${i % 4}`}>{p.name.split(" ").map((n) => n[0]).join("")}</span><div><b>{p.name}</b><small>{p.role}</small></div></td><td>{p.calls}</td><td>{p.taken}</td><td>{p.closed}</td><td><span className="rate">{p.taken ? Math.round(p.closed / p.taken * 100) : 0}%</span></td><td>{money(p.cash)}</td><td>{money(p.revenue)}</td></tr>)}
               </tbody></table></div>
             </article>
           </> : <div className="empty-panel"><span>{tab === "Payments" ? "▣" : "◎"}</span><h2>{tab} dashboard</h2><p>This view is ready for your connected {tab === "Payments" ? "payment processor" : "ad platform"} data.</p><button onClick={() => notify("Data source setup opened")}>Connect data source</button></div>}
@@ -250,13 +326,13 @@ export function Dashboard() {
 
       {modal && <div className="modal-wrap" role="dialog" aria-modal="true">
         <button className="modal-backdrop" onClick={() => setModal(null)} aria-label="Close" />
-        <form className="modal" onSubmit={modal === "client" ? addClient : invite}>
+        <form className="modal" onSubmit={modal === "client" ? addClient : modal === "sheet" ? connectSheet : invite}>
           <button type="button" className="modal-close" onClick={() => setModal(null)}>×</button>
-          <span className="modal-icon">{modal === "client" ? "▦" : "♙"}</span>
-          <h2>{modal === "client" ? "Create a subaccount" : "Invite a team member"}</h2>
-          <p>{modal === "client" ? "Set up a separate client workspace with its own dashboard and members." : `Give someone access to ${client.name}'s dashboards.`}</p>
-          {modal === "client" ? <><label>Client or company name</label><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Acme Growth" required /><label>Industry</label><select><option>Consulting & coaching</option><option>Agency</option><option>Health & wellness</option><option>Other</option></select></> : <><label>Email address</label><input autoFocus type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@company.com" required /><label>Access level</label><select><option>Viewer — can view dashboards</option><option>Editor — can manage dashboard data</option><option>Admin — can manage this subaccount</option></select><div className="access-note">This invite only grants access to <strong>{client.name}</strong>.</div></>}
-          <div className="modal-actions"><button type="button" onClick={() => setModal(null)}>Cancel</button><button type="submit">{modal === "client" ? "Create subaccount" : "Send invitation"}</button></div>
+          <span className="modal-icon">{modal === "client" ? "▦" : modal === "sheet" ? "⌁" : "♙"}</span>
+          <h2>{modal === "client" ? "Create a subaccount" : modal === "sheet" ? "Connect Google Sheets" : "Invite a team member"}</h2>
+          <p>{modal === "client" ? "Set up a separate client workspace with its own dashboard and members." : modal === "sheet" ? `Choose the spreadsheet that powers ${client.name}'s dashboard.` : `Give someone access to ${client.name}'s dashboards.`}</p>
+          {modal === "client" ? <><label>Client or company name</label><input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Acme Growth" required /><label>Industry</label><select><option>Consulting & coaching</option><option>Agency</option><option>Health & wellness</option><option>Other</option></select></> : modal === "sheet" ? <><label>Google Sheets URL</label><input autoFocus type="url" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…" required /><div className="access-note">MoonRift reads <strong>System Overview</strong>, <strong>Sales CRM</strong>, <strong>Closed Deals</strong>, and <strong>Events</strong>. Link sharing must allow viewers.</div></> : <><label>Email address</label><input autoFocus type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@company.com" required /><label>Access level</label><select><option>Viewer — can view dashboards</option><option>Editor — can manage dashboard data</option><option>Admin — can manage this subaccount</option></select><div className="access-note">This invite only grants access to <strong>{client.name}</strong>.</div></>}
+          <div className="modal-actions"><button type="button" onClick={() => setModal(null)}>Cancel</button><button type="submit">{modal === "client" ? "Create subaccount" : modal === "sheet" ? "Connect & sync" : "Send invitation"}</button></div>
         </form>
       </div>}
       {toast && <div className="toast"><span>✓</span>{toast}</div>}
