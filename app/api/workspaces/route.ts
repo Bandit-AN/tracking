@@ -1,7 +1,16 @@
-import { env } from "cloudflare:workers";
-
 type Binding = { prepare: (query: string) => { bind: (...args: unknown[]) => { run: () => Promise<unknown>; all: () => Promise<{ results?: unknown[] }> } } };
-const db = () => (env as unknown as { DB?: Binding }).DB;
+type RuntimeEnv = { DB?: Binding; GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL?: string };
+
+async function runtimeEnv(): Promise<RuntimeEnv> {
+  if (process.env.VERCEL) return process.env as RuntimeEnv;
+  try {
+    const cloudflareSpecifier = "cloudflare:workers";
+    const cloudflare = await import(cloudflareSpecifier);
+    return cloudflare.env as RuntimeEnv;
+  } catch {
+    return process.env as RuntimeEnv;
+  }
+}
 
 async function setup(binding: Binding) {
   await binding.prepare("CREATE TABLE IF NOT EXISTS workspaces (id INTEGER PRIMARY KEY, name TEXT NOT NULL, avatar TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)").bind().run();
@@ -9,7 +18,7 @@ async function setup(binding: Binding) {
 }
 
 export async function GET(request: Request) {
-  const binding = db(); if (!binding) return Response.json({ payouts: [] });
+  const binding = (await runtimeEnv()).DB; if (!binding) return Response.json({ payouts: [] });
   await setup(binding); const id = Number(new URL(request.url).searchParams.get("workspaceId") || 1);
   const workspace = await binding.prepare("SELECT name, avatar FROM workspaces WHERE id = ?").bind(id).all();
   const payouts = await binding.prepare("SELECT id, workspace_id as workspaceId, member, date, method, amount FROM payouts WHERE workspace_id = ? ORDER BY date DESC, id DESC").bind(id).all();
@@ -17,7 +26,7 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const binding = db(); if (!binding) return Response.json({ ok: true, ephemeral: true });
+  const binding = (await runtimeEnv()).DB; if (!binding) return Response.json({ ok: true, ephemeral: true });
   await setup(binding); const body = await request.json() as { workspaceId: number; name: string; avatar?: string };
   await binding.prepare("INSERT INTO workspaces (id,name,avatar,updated_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, avatar=excluded.avatar, updated_at=excluded.updated_at").bind(body.workspaceId, body.name, body.avatar || "", new Date().toISOString()).run();
   return Response.json({ ok: true });
@@ -25,9 +34,9 @@ export async function PATCH(request: Request) {
 
 export async function POST(request: Request) {
   const body = await request.json() as { id: number; workspaceId: number; member: string; date: string; method: string; amount: number };
-  const binding = db(); if (binding) { await setup(binding); await binding.prepare("INSERT OR REPLACE INTO payouts (id,workspace_id,member,date,method,amount,created_at) VALUES (?,?,?,?,?,?,?)").bind(body.id, body.workspaceId, body.member, body.date, body.method, body.amount, new Date().toISOString()).run(); }
+  const runtime = await runtimeEnv(); const binding = runtime.DB; if (binding) { await setup(binding); await binding.prepare("INSERT OR REPLACE INTO payouts (id,workspace_id,member,date,method,amount,created_at) VALUES (?,?,?,?,?,?,?)").bind(body.id, body.workspaceId, body.member, body.date, body.method, body.amount, new Date().toISOString()).run(); }
   const [role, payee] = body.member.includes(":") ? body.member.split(":") : ["Team", body.member];
-  const webhook = (env as unknown as { GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL?: string }).GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL;
+  const webhook = runtime.GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL;
   let sheetSynced = false;
   if (webhook) {
     try {
@@ -39,11 +48,11 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const binding = db(); if (!binding) return Response.json({ ok: true, ephemeral: true });
+  const runtime = await runtimeEnv(); const binding = runtime.DB; if (!binding) return Response.json({ ok: true, ephemeral: true });
   await setup(binding); const url = new URL(request.url); const id = Number(url.searchParams.get("workspaceId")); const payoutId = Number(url.searchParams.get("payoutId"));
   if (payoutId) {
     await binding.prepare("DELETE FROM payouts WHERE id = ? AND workspace_id = ?").bind(payoutId, id).run();
-    const webhook = (env as unknown as { GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL?: string }).GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL;
+    const webhook = runtime.GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL;
     let sheetSynced = false;
     if (webhook) { try { const response = await fetch(webhook, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "delete", id: payoutId }) }); sheetSynced = response.ok; } catch {} }
     return Response.json({ ok: true, sheetSynced });
