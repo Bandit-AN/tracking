@@ -12,8 +12,6 @@ type SheetMetrics = { booked: number; taken: number; showRate: number; closers: 
 const sheetUrlDefault = "https://docs.google.com/spreadsheets/d/1ahyY64u9uYmcEDFi1XAJRFmnZ_gX_6VQHUnWvswkvmg/edit?usp=sharing";
 const clientsSeed: Client[] = [
   { id: 1, name: "Seller Syndicate", industry: "Sales workspace", initials: "SS", color: "#7646ff" },
-  { id: 2, name: "Northstar Media", industry: "Creative agency", initials: "NM", color: "#009b85" },
-  { id: 3, name: "Luma Health", industry: "Health & wellness", initials: "LH", color: "#d7632e" },
 ];
 const fallbackPeople: Person[] = [
   { name: "Dillon Reed", role: "Closer", calls: 40, closed: 31, cash: 97850, revenue: 128000, commission: 9785, paid: 6000 },
@@ -131,12 +129,28 @@ export function Dashboard() {
   async function loadWorkspace() {
     try {
       const response = await fetch(`/api/workspaces?workspaceId=${clientId}`); if (!response.ok) return;
-      const data = await response.json() as { workspace?: { name?: string; avatar?: string }; payouts?: Payout[] };
-      if (data.workspace?.name) setClients((items) => items.map((item) => item.id === clientId ? { ...item, name: data.workspace!.name!, initials: initials(data.workspace!.name!), avatar: data.workspace!.avatar || "" } : item));
+      const data = await response.json() as { workspace?: { name?: string; avatar?: string; industry?: string; initials?: string; color?: string; sheetUrl?: string }; payouts?: Payout[] };
+      if (data.workspace?.name) {
+        setClients((items) => items.map((item) => item.id === clientId ? { ...item, name: data.workspace!.name!, initials: data.workspace!.initials || initials(data.workspace!.name!), avatar: data.workspace!.avatar || "", industry: data.workspace!.industry || item.industry, color: data.workspace!.color || item.color } : item));
+        if (data.workspace.sheetUrl) setSheetUrls((items) => ({ ...items, [clientId]: data.workspace!.sheetUrl! }));
+      }
       setPayouts(data.payouts ?? []);
     } catch { /* Preview remains usable when local D1 is unavailable. */ }
   }
 
+  async function loadWorkspaceList() {
+    try {
+      const response = await fetch("/api/workspaces?all=true"); if (!response.ok) return;
+      const data = await response.json() as { workspaces?: Array<Client & { sheetUrl?: string }> };
+      if (data.workspaces?.length) {
+        const normalized = data.workspaces.map((item) => ({ ...item, id: Number(item.id), initials: item.initials || initials(item.name), color: item.color || "#7646ff" }));
+        setClients(normalized); setSheetUrls(Object.fromEntries(data.workspaces.filter((item) => item.sheetUrl).map((item) => [Number(item.id), item.sheetUrl!] as const)));
+        if (!normalized.some((item) => item.id === clientId)) setClientId(normalized[0].id);
+      }
+    } catch {}
+  }
+
+  useEffect(() => { void loadWorkspaceList(); }, []);
   useEffect(() => { void loadSheet(); void loadWorkspace(); }, [clientId]);
   const notify = (text: string) => { setToast(text); window.setTimeout(() => setToast(""), 2800); };
 
@@ -170,11 +184,11 @@ export function Dashboard() {
     return payouts.filter((payout) => { const date = new Date(`${payout.date} 12:00:00`); return date >= start && date <= end; });
   }, [payouts, range, customStart, customEnd]);
 
-  function addClient(e: React.FormEvent) { e.preventDefault(); if (!newName.trim()) return; const id = Date.now(); setClients((items) => [...items, { id, name: newName.trim(), industry: "New workspace", initials: initials(newName), color: "#3366e8" }]); setClientId(id); setNewName(""); setModal(null); notify("Workspace created"); }
+  async function addClient(e: React.FormEvent) { e.preventDefault(); if (!newName.trim()) return; const id = Date.now(); const created = { id, name: newName.trim(), industry: "New workspace", initials: initials(newName), color: "#3366e8" }; const response = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "workspace", workspaceId: id, ...created }) }); if (!response.ok) { notify("Workspace database is not connected"); return; } setClients((items) => [...items, created]); setClientId(id); setNewName(""); setModal(null); notify("Workspace created and shared"); }
   function invite(e: React.FormEvent) { e.preventDefault(); if (!email.includes("@")) return; setModal(null); notify(`Invite sent to ${email}`); setEmail(""); }
-  function connectSheet(e: React.FormEvent) { e.preventDefault(); setSheetUrls((items) => ({ ...items, [clientId]: sheetUrl })); setModal(null); void loadSheet(sheetUrl); notify("Google Sheet connected"); }
-  async function saveSettings(e: React.FormEvent) { e.preventDefault(); const name = workspaceName.trim() || client.name; setClients((items) => items.map((item) => item.id === clientId ? { ...item, name, initials: initials(name), avatar: workspaceAvatar.trim() } : item)); setModal(null); notify("Workspace updated"); try { await fetch("/api/workspaces", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: clientId, name, avatar: workspaceAvatar.trim() }) }); } catch {} }
-  async function deleteWorkspace() { if (!window.confirm(`Delete ${client.name}? This removes its saved payouts and settings.`)) return; try { await fetch(`/api/workspaces?workspaceId=${clientId}`, { method: "DELETE" }); } catch {} const next = clients.find((x) => x.id !== clientId); setClients((items) => items.filter((x) => x.id !== clientId)); if (next) setClientId(next.id); setModal(null); notify("Workspace deleted"); }
+  async function connectSheet(e: React.FormEvent) { e.preventDefault(); const response = await fetch("/api/workspaces", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: clientId, ...client, sheetUrl }) }); if (!response.ok) { notify("Workspace database is not connected"); return; } setSheetUrls((items) => ({ ...items, [clientId]: sheetUrl })); setModal(null); void loadSheet(sheetUrl); notify("Google Sheet connected for every preview"); }
+  async function saveSettings(e: React.FormEvent) { e.preventDefault(); const name = workspaceName.trim() || client.name; const updated = { ...client, name, initials: initials(name), avatar: workspaceAvatar.trim() }; const response = await fetch("/api/workspaces", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: clientId, ...updated, sheetUrl: sheetUrls[clientId] || "" }) }); if (!response.ok) { notify("Workspace database is not connected"); return; } setClients((items) => items.map((item) => item.id === clientId ? updated : item)); setModal(null); notify("Workspace updated for every preview"); }
+  async function deleteWorkspace() { if (clients.length === 1) { notify("Create another workspace before deleting this one"); return; } if (!window.confirm(`Delete ${client.name}? This removes its saved payouts and settings.`)) return; const response = await fetch(`/api/workspaces?workspaceId=${clientId}`, { method: "DELETE" }); if (!response.ok) { notify("Workspace could not be deleted"); return; } const next = clients.find((x) => x.id !== clientId)!; setClients((items) => items.filter((x) => x.id !== clientId)); setClientId(next.id); setModal(null); notify("Workspace deleted from every preview"); }
   async function addPayout(e: React.FormEvent) { e.preventDefault(); const amount = numeric(payoutAmount); if (!payoutMember || amount <= 0) return; const optimistic: Payout = { id: Date.now(), workspaceId: clientId, member: payoutMember, date: payoutDate, method: payoutMethod, amount }; setPayouts((items) => [optimistic, ...items]); setModal(null); setPayoutAmount(""); try { const response = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(optimistic) }); const result = await response.json() as { sheetSynced?: boolean }; notify(result.sheetSynced ? "Payout recorded and synced to Google Sheets" : "Payout recorded; Google Sheets sync needs connection"); if (response.ok) void loadWorkspace(); } catch { notify("Payout recorded locally; sheet sync unavailable"); } }
   async function deletePayout(payout: Payout) {
     if (!window.confirm(`Delete the ${money(payout.amount)} payout for ${payout.member.split(":").at(-1)}?`)) return;
