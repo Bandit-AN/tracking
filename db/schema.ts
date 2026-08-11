@@ -289,6 +289,35 @@ export const meetings = pgTable(
   ],
 );
 
+export const applicantEvents = pgTable(
+  "applicant_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: bigint("workspace_id", { mode: "number" })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    sourceKey: text("source_key").notNull(),
+    occurredAt: date("occurred_at", { mode: "string" }).notNull(),
+    eventName: text("event_name").notNull().default("application_submitted"),
+    syncedAt: timestamp("synced_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("applicant_events_workspace_source_uidx").on(
+      table.workspaceId,
+      table.sourceKey,
+    ),
+    index("applicant_events_workspace_date_idx").on(
+      table.workspaceId,
+      table.occurredAt,
+    ),
+  ],
+);
+
 export const syncRuns = pgTable(
   "sync_runs",
   {

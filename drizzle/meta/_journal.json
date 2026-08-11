@@ -36,6 +36,13 @@
       "when": 1786429000000,
       "tag": "0004_auth_admin_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786518000000,
+      "tag": "0005_applicant_events",
+      "breakpoints": true
     }
   ]
 }

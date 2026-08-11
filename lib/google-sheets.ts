@@ -36,6 +36,12 @@ export type ImportedMeeting = {
   taken: boolean;
 };
 
+export type ImportedApplicant = {
+  sourceKey: string;
+  occurredAt: string;
+  eventName: "application_submitted";
+};
+
 function parseCsv(text: string) {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -119,10 +125,11 @@ async function fetchSheet(spreadsheetId: string, sheet: string) {
 
 export async function importGoogleSheet(sheetUrl: string) {
   const spreadsheetId = sheetIdFromUrl(sheetUrl);
-  const [overview, closedDeals, crm] = await Promise.all([
+  const [overview, closedDeals, crm, eventRows] = await Promise.all([
     fetchSheet(spreadsheetId, "System Overview"),
     fetchSheet(spreadsheetId, "Closed Deals"),
     fetchSheet(spreadsheetId, "Sales CRM"),
+    fetchSheet(spreadsheetId, "Events"),
   ]);
 
   const section = (name: string, stop: string[]) => {
@@ -188,6 +195,31 @@ export async function importGoogleSheet(sheetUrl: string) {
     ];
   });
 
+  // The Events export's first row contains the headers followed by the first
+  // few event values in the same cells; subsequent rows are one event each.
+  // Normalize both forms and persist only completed application submissions.
+  const normalizedEvents = eventRows.flatMap((row, index) => {
+    if (index === 0 && row[0]?.startsWith("timestamp ")) {
+      const timestamps = row[0].trim().split(/\s+/).slice(1);
+      const eventNames = row[1]?.trim().split(/\s+/).slice(1) ?? [];
+      return timestamps.map((timestamp, eventIndex) => ({
+        timestamp,
+        eventName: eventNames[eventIndex] ?? "",
+      }));
+    }
+    return [{ timestamp: row[0]?.trim() ?? "", eventName: row[1]?.trim() ?? "" }];
+  });
+
+  const applicants: ImportedApplicant[] = normalizedEvents.flatMap((event) => {
+    const occurredAt = event.timestamp.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+    if (!occurredAt || event.eventName !== "application_submitted") return [];
+    return [{
+      sourceKey: sourceKey([event.timestamp, event.eventName]),
+      occurredAt,
+      eventName: "application_submitted" as const,
+    }];
+  });
+
   return {
     people: [
       ...peopleFromRows(section("Setter Name", ["Closer Name"]), "setter"),
@@ -196,5 +228,6 @@ export async function importGoogleSheet(sheetUrl: string) {
     ],
     deals,
     meetings,
+    applicants,
   };
 }

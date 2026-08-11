@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  applicantEvents,
   deals,
   meetings,
   payouts,
@@ -30,7 +31,15 @@ export async function GET(request: Request) {
 
   const db = getDb();
   const isStudent = authResult.context.portalUser.role === "student";
-  const [workspaceRows, performanceRows, dealRows, meetingRows, payoutRows, syncRows] =
+  const [
+    workspaceRows,
+    performanceRows,
+    dealRows,
+    meetingRows,
+    applicantRows,
+    payoutRows,
+    syncRows,
+  ] =
     await Promise.all([
       isAgency
         ? Promise.resolve([
@@ -137,6 +146,20 @@ export async function GET(request: Request) {
         ? Promise.resolve([])
         : db
             .select({
+              id: applicantEvents.id,
+              date: applicantEvents.occurredAt,
+            })
+            .from(applicantEvents)
+            .where(
+              isAgency
+                ? undefined
+                : eq(applicantEvents.workspaceId, workspaceId),
+            )
+            .orderBy(desc(applicantEvents.occurredAt)),
+      isStudent
+        ? Promise.resolve([])
+        : db
+            .select({
               id: payouts.id,
               workspaceId: payouts.workspaceId,
               member: payouts.member,
@@ -171,6 +194,7 @@ export async function GET(request: Request) {
     performance: performanceRows,
     deals: dealRows,
     meetings: meetingRows,
+    applicants: applicantRows,
     payouts: payoutRows,
     lastSync: syncRows[0] ?? null,
     permissions: {

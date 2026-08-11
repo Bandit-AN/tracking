@@ -56,5 +56,8 @@ test("authenticated dashboard retains its responsive layout hooks", async () => 
   assert.match(dashboard, /className={`sidebar/);
   assert.match(dashboard, /<main className="content">/);
   assert.match(dashboard, /<header className="topbar">/);
-  assert.equal((dashboard.match(/<article className="kpi">/g) ?? []).length, 4);
+  assert.equal((dashboard.match(/<article className="kpi">/g) ?? []).length, 8);
+  assert.match(dashboard, /Top closers/);
+  assert.match(dashboard, /Top setters/);
+  assert.match(dashboard, /ConversionFunnel/);
 });
