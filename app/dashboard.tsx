@@ -434,7 +434,7 @@ export function Dashboard({
 
   return (
     <div className="app-shell">
-      <aside className={sidebarOpen ? "open" : ""}>
+      <aside className={`sidebar${sidebarOpen ? " open" : ""}`}>
         <div className="brand">
           <span className="brand-mark"><Image src="/moonrift-logo.png" alt="" width={28} height={28} priority /></span>
           <span>MoonRift Media</span>
@@ -479,11 +479,11 @@ export function Dashboard({
           <button onClick={() => void signOut()} aria-label="Log out">↪</button>
         </div>
       </aside>
-      {sidebarOpen && <button className="mobile-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
+      {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
 
-      <main>
-        <header>
-          <button className="hamburger" onClick={() => setSidebarOpen(true)} aria-label="Open menu">☰</button>
+      <main className="content">
+        <header className="topbar">
+          <button className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">☰</button>
           <div><b>MoonRift Media Client Portal</b><small>Secure offer intelligence</small></div>
           <span className="live-badge"><i /> Live database</span>
         </header>
@@ -514,10 +514,10 @@ export function Dashboard({
           {!loading && !error && data && tab === "Overview" && (
             <>
               <section className="kpi-grid">
-                <article><span>Cash collected</span><strong>{money(period.cash)}</strong><small>Selected period</small></article>
-                <article><span>Revenue contracted</span><strong>{money(period.revenue)}</strong><small>{period.deals.length} closed deals</small></article>
-                <article><span>Meetings booked</span><strong>{period.meetings.length}</strong><small>{period.taken} taken</small></article>
-                <article><span>Show rate</span><strong>{period.meetings.length ? Math.round((period.taken / period.meetings.length) * 100) : 0}%</strong><small>Selected period</small></article>
+                <article className="kpi"><span>Cash collected</span><strong>{money(period.cash)}</strong><small>Selected period</small></article>
+                <article className="kpi"><span>Revenue contracted</span><strong>{money(period.revenue)}</strong><small>{period.deals.length} closed deals</small></article>
+                <article className="kpi"><span>Meetings booked</span><strong>{period.meetings.length}</strong><small>{period.taken} taken</small></article>
+                <article className="kpi"><span>Show rate</span><strong>{period.meetings.length ? Math.round((period.taken / period.meetings.length) * 100) : 0}%</strong><small>Selected period</small></article>
               </section>
               <Chart data={period.series} labels={period.labels} />
               {data.permissions.canViewTeam && <PerformanceTable people={data.performance} />}

@@ -47,3 +47,14 @@ test("agency-wide aggregation is restricted to portal administrators", async () 
     /workspaceId === 0 && authResult\.context\.portalUser\.role === "admin"/,
   );
 });
+
+test("authenticated dashboard retains its responsive layout hooks", async () => {
+  const dashboard = await readFile(
+    new URL("app/dashboard.tsx", root),
+    "utf8",
+  );
+  assert.match(dashboard, /className={`sidebar/);
+  assert.match(dashboard, /<main className="content">/);
+  assert.match(dashboard, /<header className="topbar">/);
+  assert.equal((dashboard.match(/<article className="kpi">/g) ?? []).length, 4);
+});
