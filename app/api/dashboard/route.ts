@@ -19,7 +19,12 @@ export async function GET(request: Request) {
   if ("response" in authResult) return authResult.response;
 
   const workspaceId = Number(new URL(request.url).searchParams.get("workspaceId"));
-  if (!(await canAccessWorkspace(authResult.context, workspaceId))) {
+  const isAgency =
+    workspaceId === 0 && authResult.context.portalUser.role === "admin";
+  if (
+    !isAgency &&
+    !(await canAccessWorkspace(authResult.context, workspaceId))
+  ) {
     return Response.json({ error: "Workspace not found" }, { status: 404 });
   }
 
@@ -27,20 +32,33 @@ export async function GET(request: Request) {
   const isStudent = authResult.context.portalUser.role === "student";
   const [workspaceRows, performanceRows, dealRows, meetingRows, payoutRows, syncRows] =
     await Promise.all([
-      db
-        .select({
-          id: workspaces.id,
-          name: workspaces.name,
-          avatar: workspaces.avatar,
-          industry: workspaces.industry,
-          initials: workspaces.initials,
-          color: workspaces.color,
-          sheetUrl: workspaces.sheetUrl,
-          updatedAt: workspaces.updatedAt,
-        })
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId))
-        .limit(1),
+      isAgency
+        ? Promise.resolve([
+            {
+              id: 0,
+              name: "Agency overview",
+              avatar: null,
+              industry: "All client offers",
+              initials: "MR",
+              color: "#7646ff",
+              sheetUrl: null,
+              updatedAt: new Date(),
+            },
+          ])
+        : db
+            .select({
+              id: workspaces.id,
+              name: workspaces.name,
+              avatar: workspaces.avatar,
+              industry: workspaces.industry,
+              initials: workspaces.initials,
+              color: workspaces.color,
+              sheetUrl: workspaces.sheetUrl,
+              updatedAt: workspaces.updatedAt,
+            })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .limit(1),
       isStudent
         ? Promise.resolve([])
         : db
@@ -61,10 +79,12 @@ export async function GET(request: Request) {
               eq(teamPerformance.teamMemberId, teamMembers.id),
             )
             .where(
-              and(
-                eq(teamMembers.workspaceId, workspaceId),
-                eq(teamMembers.active, true),
-              ),
+              isAgency
+                ? eq(teamMembers.active, true)
+                : and(
+                    eq(teamMembers.workspaceId, workspaceId),
+                    eq(teamMembers.active, true),
+                  ),
             ),
       db
         .select({
@@ -84,7 +104,9 @@ export async function GET(request: Request) {
         })
         .from(deals)
         .where(
-          isStudent
+          isAgency
+            ? undefined
+            : isStudent
             ? and(
                 eq(deals.workspaceId, workspaceId),
                 eq(deals.clientUserId, authResult.context.portalUser.id),
@@ -101,7 +123,9 @@ export async function GET(request: Request) {
         })
         .from(meetings)
         .where(
-          isStudent
+          isAgency
+            ? undefined
+            : isStudent
             ? and(
                 eq(meetings.workspaceId, workspaceId),
                 eq(meetings.clientUserId, authResult.context.portalUser.id),
@@ -121,7 +145,7 @@ export async function GET(request: Request) {
               amount: payouts.amount,
             })
             .from(payouts)
-            .where(eq(payouts.workspaceId, workspaceId))
+            .where(isAgency ? undefined : eq(payouts.workspaceId, workspaceId))
             .orderBy(desc(payouts.date), desc(payouts.id)),
       db
         .select({
@@ -130,7 +154,7 @@ export async function GET(request: Request) {
           finishedAt: syncRuns.finishedAt,
         })
         .from(syncRuns)
-        .where(eq(syncRuns.workspaceId, workspaceId))
+        .where(isAgency ? undefined : eq(syncRuns.workspaceId, workspaceId))
         .orderBy(desc(syncRuns.startedAt))
         .limit(1),
     ]);
@@ -150,7 +174,8 @@ export async function GET(request: Request) {
     payouts: payoutRows,
     lastSync: syncRows[0] ?? null,
     permissions: {
-      canManage: authResult.context.portalUser.role === "admin",
+      canManage:
+        authResult.context.portalUser.role === "admin" && !isAgency,
       canViewTeam: !isStudent,
       canViewPayouts: !isStudent,
     },

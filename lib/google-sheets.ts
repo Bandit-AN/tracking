@@ -103,7 +103,7 @@ function sheetIdFromUrl(value: string) {
 async function fetchSheet(spreadsheetId: string, sheet: string) {
   const source = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`;
   const response = await fetch(source, {
-    headers: { "User-Agent": "Seller-Syndicate-Portal/1.0" },
+    headers: { "User-Agent": "MoonRift-Media-Client-Portal/1.0" },
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
   });

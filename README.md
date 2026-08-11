@@ -1,13 +1,15 @@
-# Seller Syndicate Portal
+# MoonRift Media Client Portal
 
-Production Seller Syndicate sales, revenue, team, and payout portal for MoonRift Media.
+Production multi-client offer, sales, revenue, team, and payout portal for
+MoonRift Media.
 
 ## Architecture
 
 - Next.js 16 App Router deployed to Vercel
 - Neon Postgres with Drizzle ORM and forward-only SQL migrations
 - Neon Auth for email/password identity, HTTP-only sessions, password reset, and administrator-created users
-- Server-side role and workspace authorization for all portal reads and writes
+- Server-side role and client-subaccount authorization for all portal reads and writes
+- Agency-wide aggregate performance plus isolated client offer views
 - Administrator-only Google Sheets ingestion into normalized Neon records
 
 The production application URL is `https://app.moonriftmedia.com`. The Vercel
@@ -48,7 +50,7 @@ Public registration is blocked. Create the first identity in Neon Console,
 assign its Better Auth role to `admin`, and add the same email to the
 server-only `PORTAL_ADMIN_EMAILS` Vercel variable. On first successful login,
 the portal creates the matching application authorization record. Thereafter,
-portal administrators can create users and assign roles/workspaces from the
+portal administrators can create users and assign roles/client subaccounts from the
 Users page.
 
 Configure a production email provider in Neon Auth before relying on password

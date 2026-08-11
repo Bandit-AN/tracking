@@ -63,7 +63,7 @@ export function AuthForm({ path, token }: { path: string; token?: string }) {
   return (
     <div className="portal-auth-card">
       <div className="portal-auth-heading">
-        <p className="auth-kicker">SELLER SYNDICATE</p>
+        <p className="auth-kicker">MOONRIFT MEDIA</p>
         <h2>{isReset ? "Choose a new password" : isForgot ? "Reset your password" : "Welcome back"}</h2>
         <p>{isReset ? "Use at least 12 characters for your new password." : isForgot ? "Enter your account email and we’ll send a secure reset link." : "Sign in with the account created by your administrator."}</p>
       </div>
@@ -77,7 +77,7 @@ export function AuthForm({ path, token }: { path: string; token?: string }) {
       </form>
       <div className="auth-card-footer">
         {isForgot || isReset ? <Link href="/auth/sign-in">Back to sign in</Link> : <Link href="/auth/forgot-password">Forgot password?</Link>}
-        {!isForgot && !isReset && <small>No account? Contact your Seller Syndicate administrator.</small>}
+        {!isForgot && !isReset && <small>No account? Contact your MoonRift Media administrator.</small>}
       </div>
     </div>
   );

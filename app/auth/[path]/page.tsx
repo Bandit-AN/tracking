@@ -26,17 +26,17 @@ export default async function AuthPage({
       <section className="auth-brand-panel">
         <div className="auth-wordmark">
           <Image src="/moonrift-logo.png" alt="" width={38} height={38} priority />
-          <span>Seller Syndicate</span>
+          <span>MoonRift Media</span>
         </div>
         <div>
-          <p className="auth-kicker">MOONRIFT MEDIA</p>
-          <h1>Your sales operation, in one secure view.</h1>
+          <p className="auth-kicker">CLIENT PERFORMANCE PORTAL</p>
+          <h1>Your offer performance, in one secure view.</h1>
           <p>
             Track revenue, team performance, closed deals, and payouts with
             access tailored to your role.
           </p>
         </div>
-        <small>Authorized Seller Syndicate members only.</small>
+        <small>Authorized MoonRift Media clients and team members only.</small>
       </section>
       <section className="auth-form-panel">
         <AuthForm path={path} token={token} />

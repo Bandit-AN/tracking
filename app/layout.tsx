@@ -13,11 +13,11 @@ export async function generateMetadata(): Promise<Metadata> {
   const image = `${protocol}://${host}/og.png`;
   return {
     metadataBase: new URL(`${protocol}://${host}`),
-    title: "Seller Syndicate Portal — MoonRift Media",
-    description: "Secure Seller Syndicate sales, revenue, team, and payout intelligence.",
+    title: "MoonRift Media Client Portal",
+    description: "Secure client offer, sales, revenue, team, and payout intelligence.",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title: "Seller Syndicate Portal", description: "Secure revenue intelligence by MoonRift Media.", images: [{ url: image, width: 1792, height: 915 }] },
-    twitter: { card: "summary_large_image", title: "Seller Syndicate Portal", description: "Secure revenue intelligence by MoonRift Media.", images: [image] },
+    openGraph: { title: "MoonRift Media Client Portal", description: "Secure offer and revenue intelligence by MoonRift Media.", images: [{ url: image, width: 1792, height: 915 }] },
+    twitter: { card: "summary_large_image", title: "MoonRift Media Client Portal", description: "Secure offer and revenue intelligence by MoonRift Media.", images: [image] },
   };
 }
 

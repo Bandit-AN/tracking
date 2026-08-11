@@ -174,9 +174,13 @@ export function Dashboard({
 }) {
   const router = useRouter();
   const [workspaces, setWorkspaces] = useState(initialWorkspaces);
-  const [workspaceId, setWorkspaceId] = useState(initialWorkspaces[0]?.id ?? 0);
+  const [workspaceId, setWorkspaceId] = useState(
+    currentUser.role === "admin" ? 0 : (initialWorkspaces[0]?.id ?? 0),
+  );
   const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(Boolean(initialWorkspaces.length));
+  const [loading, setLoading] = useState(
+    currentUser.role === "admin" || Boolean(initialWorkspaces.length),
+  );
   const [error, setError] = useState("");
   const [tab, setTab] = useState("Overview");
   const [range, setRange] = useState("Last 30 days");
@@ -201,7 +205,7 @@ export function Dashboard({
   };
 
   const loadDashboard = useCallback(async () => {
-    if (!workspaceId) return;
+    if (workspaceId === 0 && currentUser.role !== "admin") return;
     setLoading(true);
     setError("");
     try {
@@ -213,7 +217,7 @@ export function Dashboard({
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, currentUser.role]);
 
   const loadUsers = useCallback(async () => {
     if (currentUser.role !== "admin") return;
@@ -230,7 +234,7 @@ export function Dashboard({
   }, [currentUser.role]);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (workspaceId === 0 && currentUser.role !== "admin") return;
     let cancelled = false;
     void fetch(`/api/dashboard?workspaceId=${workspaceId}`)
       .then(async (response) => {
@@ -251,7 +255,7 @@ export function Dashboard({
     return () => {
       cancelled = true;
     };
-  }, [workspaceId]);
+  }, [workspaceId, currentUser.role]);
 
   const period = useMemo(() => {
     const now = range === "Custom" ? new Date(`${customEnd}T23:59:59`) : new Date();
@@ -323,7 +327,7 @@ export function Dashboard({
     setWorkspaces(next);
     setWorkspaceId(next.at(-1)?.id ?? workspaceId);
     setModal(null);
-    notify("Workspace created");
+    notify("Client subaccount created");
   }
 
   async function updateWorkspace(formData: FormData) {
@@ -337,7 +341,7 @@ export function Dashboard({
     setModal(null);
     router.refresh();
     await loadDashboard();
-    notify("Workspace settings saved");
+    notify("Client subaccount settings saved");
   }
 
   async function addPayout(formData: FormData) {
@@ -433,15 +437,18 @@ export function Dashboard({
       <aside className={sidebarOpen ? "open" : ""}>
         <div className="brand">
           <span className="brand-mark"><Image src="/moonrift-logo.png" alt="" width={28} height={28} priority /></span>
-          <span>Seller Syndicate</span>
+          <span>MoonRift Media</span>
         </div>
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">CLIENT SUBACCOUNT</div>
         <select
           className="workspace-select"
           value={workspaceId}
           onChange={(event) => { setLoading(true); setError(""); setWorkspaceId(Number(event.target.value)); }}
-          aria-label="Workspace"
+          aria-label="Client subaccount"
         >
+          {currentUser.role === "admin" && (
+            <option value={0}>Agency overview — all offers</option>
+          )}
           {workspaces.map((workspace) => (
             <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
           ))}
@@ -451,7 +458,7 @@ export function Dashboard({
             className="new-workspace-button"
             onClick={() => setModal("workspace")}
           >
-            ＋ New workspace
+            ＋ New subaccount
           </button>
         )}
         <nav>
@@ -477,14 +484,14 @@ export function Dashboard({
       <main>
         <header>
           <button className="hamburger" onClick={() => setSidebarOpen(true)} aria-label="Open menu">☰</button>
-          <div><b>Seller Syndicate Portal</b><small>Secure revenue intelligence</small></div>
+          <div><b>MoonRift Media Client Portal</b><small>Secure offer intelligence</small></div>
           <span className="live-badge"><i /> Live database</span>
         </header>
         <div className="dashboard">
           <div className="page-title">
             <div>
-              <h1>{currentWorkspace?.name ?? "Seller Syndicate"} <span>{tab}</span></h1>
-              <p>Live sales, team performance, and payouts from Neon.</p>
+              <h1>{currentWorkspace?.name ?? "MoonRift Media"} <span>{tab}</span></h1>
+              <p>{workspaceId === 0 ? "Agency-wide performance across every client offer." : "Live sales, team performance, and payouts for this client offer."}</p>
             </div>
             {data?.permissions.canManage && (
               <div className="title-actions">
@@ -502,7 +509,7 @@ export function Dashboard({
 
           {loading && <div className="state-card" role="status">Loading live portal data…</div>}
           {error && <div className="state-card error-state"><b>Dashboard unavailable</b><p>{error}</p><button onClick={() => void loadDashboard()}>Try again</button></div>}
-          {!loading && !error && !workspaces.length && <div className="state-card"><b>No workspace access</b><p>An administrator must assign this account to a workspace.</p></div>}
+          {!loading && !error && !workspaces.length && currentUser.role !== "admin" && <div className="state-card"><b>No subaccount access</b><p>A MoonRift Media administrator must assign this account to a client subaccount.</p></div>}
 
           {!loading && !error && data && tab === "Overview" && (
             <>
@@ -528,17 +535,17 @@ export function Dashboard({
           )}
 
           {!loading && !error && tab === "Users" && (
-            <><div className="payout-head"><div><h2>Portal users</h2><p>Manage roles, status, and workspace access.</p></div><button onClick={() => { setSelectedUser(null); setModal("account"); }}>＋ Create account</button></div>{usersLoading ? <div className="state-card">Loading accounts…</div> : <article className="table-card"><div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Workspaces</th><th>Status</th><th></th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><div><b>{user.name}</b><small>{user.email}</small></div></td><td>{user.role.replace("_", " ")}</td><td>{user.role === "admin" ? "All" : user.workspaceIds.length}</td><td><span className={`status ${user.status}`}>{user.status}</span></td><td><div className="row-actions"><button onClick={() => { setSelectedUser(user); setModal("edit-account"); }}>Edit</button><button className="delete-payout" onClick={() => void toggleUser(user)}>{user.status === "active" ? "Disable" : "Enable"}</button></div></td></tr>)}{!users.length && <tr><td colSpan={5}>No portal accounts yet.</td></tr>}</tbody></table></div></article>}</>
+            <><div className="payout-head"><div><h2>Portal users</h2><p>Manage roles, status, and client subaccount access.</p></div><button onClick={() => { setSelectedUser(null); setModal("account"); }}>＋ Create account</button></div>{usersLoading ? <div className="state-card">Loading accounts…</div> : <article className="table-card"><div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Subaccounts</th><th>Status</th><th></th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><div><b>{user.name}</b><small>{user.email}</small></div></td><td>{user.role.replace("_", " ")}</td><td>{user.role === "admin" ? "All" : user.workspaceIds.length}</td><td><span className={`status ${user.status}`}>{user.status}</span></td><td><div className="row-actions"><button onClick={() => { setSelectedUser(user); setModal("edit-account"); }}>Edit</button><button className="delete-payout" onClick={() => void toggleUser(user)}>{user.status === "active" ? "Disable" : "Enable"}</button></div></td></tr>)}{!users.length && <tr><td colSpan={5}>No portal accounts yet.</td></tr>}</tbody></table></div></article>}</>
           )}
         </div>
       </main>
 
-      {modal && <Modal title={modal === "workspace" ? "Create workspace" : modal === "settings" ? "Workspace settings" : modal === "payout" ? "Record payout" : modal === "edit-account" ? "Edit portal account" : "Create portal account"} onClose={() => { setModal(null); setSelectedUser(null); }} onSubmit={async (formData) => { try { if (modal === "workspace") await createWorkspace(formData); if (modal === "settings") await updateWorkspace(formData); if (modal === "payout") await addPayout(formData); if (modal === "account") await createAccount(formData); if (modal === "edit-account") await updateAccount(formData); } catch (submitError) { notify(submitError instanceof Error ? submitError.message : "Request failed"); } }}>
-        {modal === "workspace" && <><label>Workspace name</label><input name="name" required minLength={2} /><label>Industry</label><input name="industry" defaultValue="Sales workspace" required /></>}
-        {modal === "settings" && <><label>Workspace name</label><input name="name" defaultValue={data?.workspace.name} required /><label>Industry</label><input name="industry" defaultValue={data?.workspace.industry} required /><label>Profile image URL</label><input name="avatar" type="url" defaultValue={data?.workspace.avatar} /><label>Google Sheets URL</label><input name="sheetUrl" type="url" defaultValue={data?.workspace.sheetUrl} /><div className="access-note">The sheet is read only by the server. Imported records are normalized into Neon and never exposed through a public sheet proxy.</div></>}
+      {modal && <Modal title={modal === "workspace" ? "Create client subaccount" : modal === "settings" ? "Client subaccount settings" : modal === "payout" ? "Record payout" : modal === "edit-account" ? "Edit portal account" : "Create portal account"} onClose={() => { setModal(null); setSelectedUser(null); }} onSubmit={async (formData) => { try { if (modal === "workspace") await createWorkspace(formData); if (modal === "settings") await updateWorkspace(formData); if (modal === "payout") await addPayout(formData); if (modal === "account") await createAccount(formData); if (modal === "edit-account") await updateAccount(formData); } catch (submitError) { notify(submitError instanceof Error ? submitError.message : "Request failed"); } }}>
+        {modal === "workspace" && <><label>Client or offer name</label><input name="name" required minLength={2} /><label>Industry / offer type</label><input name="industry" defaultValue="Client offer" required /></>}
+        {modal === "settings" && <><label>Client or offer name</label><input name="name" defaultValue={data?.workspace.name} required /><label>Industry / offer type</label><input name="industry" defaultValue={data?.workspace.industry} required /><label>Profile image URL</label><input name="avatar" type="url" defaultValue={data?.workspace.avatar} /><label>Google Sheets URL</label><input name="sheetUrl" type="url" defaultValue={data?.workspace.sheetUrl} /><div className="access-note">The sheet is read only by the server. Imported records are normalized into Neon and never exposed through a public sheet proxy.</div></>}
         {modal === "payout" && <><label>Payee</label><select name="member" required>{data?.performance.map((person) => <option key={person.id} value={`${person.role}:${person.name}`}>{person.name} — {person.role}</option>)}</select><label>Date</label><input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /><label>Method</label><select name="method"><option>ACH</option><option>Wire</option><option>Zelle</option><option>PayPal</option><option>Venmo</option><option>Other</option></select><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></>}
-        {modal === "account" && <><label>Full name</label><input name="name" required minLength={2} /><label>Email</label><input name="email" type="email" required /><label>Temporary password</label><input name="password" type="password" minLength={12} autoComplete="new-password" required /><small className="field-help">Use 12+ characters and share it through a secure channel. The password is hashed by Neon Auth and is never stored in portal tables.</small><label>Role</label><select name="role"><option value="team_member">Team member</option><option value="student">Student / client</option><option value="admin">Admin</option></select><fieldset><legend>Workspace access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} /> {workspace.name}</label>)}</fieldset></>}
-        {modal === "edit-account" && selectedUser && <><div className="access-note"><b>{selectedUser.name}</b><br />{selectedUser.email}</div><label>Role</label><select name="role" defaultValue={selectedUser.role}><option value="team_member">Team member</option><option value="student">Student / client</option><option value="admin">Admin</option></select><label>Status</label><select name="status" defaultValue={selectedUser.status}><option value="active">Active</option><option value="disabled">Disabled</option></select><fieldset><legend>Workspace access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} defaultChecked={selectedUser.workspaceIds.includes(workspace.id)} /> {workspace.name}</label>)}</fieldset></>}
+        {modal === "account" && <><label>Full name</label><input name="name" required minLength={2} /><label>Email</label><input name="email" type="email" required /><label>Temporary password</label><input name="password" type="password" minLength={12} autoComplete="new-password" required /><small className="field-help">Use 12+ characters and share it through a secure channel. The password is hashed by Neon Auth and is never stored in portal tables.</small><label>Role</label><select name="role"><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} /> {workspace.name}</label>)}</fieldset></>}
+        {modal === "edit-account" && selectedUser && <><div className="access-note"><b>{selectedUser.name}</b><br />{selectedUser.email}</div><label>Role</label><select name="role" defaultValue={selectedUser.role}><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><label>Status</label><select name="status" defaultValue={selectedUser.status}><option value="active">Active</option><option value="disabled">Disabled</option></select><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} defaultChecked={selectedUser.workspaceIds.includes(workspace.id)} /> {workspace.name}</label>)}</fieldset></>}
       </Modal>}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </div>

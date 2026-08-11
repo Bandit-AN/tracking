@@ -36,3 +36,14 @@ test("secret environment variables are server-only", async () => {
   const source = files.join("\n");
   assert.doesNotMatch(source, /NEXT_PUBLIC_(DATABASE|POSTGRES|NEON_AUTH_COOKIE)/);
 });
+
+test("agency-wide aggregation is restricted to portal administrators", async () => {
+  const dashboardRoute = await readFile(
+    new URL("app/api/dashboard/route.ts", root),
+    "utf8",
+  );
+  assert.match(
+    dashboardRoute,
+    /workspaceId === 0 && authResult\.context\.portalUser\.role === "admin"/,
+  );
+});

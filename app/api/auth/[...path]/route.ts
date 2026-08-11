@@ -17,7 +17,7 @@ export const DELETE = handler.DELETE;
 export async function POST(request: Request, context: RouteContext) {
   if (await rejectPublicRegistration(context)) {
     return Response.json(
-      { error: "Accounts are created by a Seller Syndicate administrator." },
+      { error: "Accounts are created by a MoonRift Media administrator." },
       { status: 403 },
     );
   }
