@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const root = new URL("../", import.meta.url);
+
+test("protected data routes require server authorization", async () => {
+  const routes = await Promise.all(
+    [
+      "app/api/dashboard/route.ts",
+      "app/api/workspaces/route.ts",
+      "app/api/workspaces/[id]/sync/route.ts",
+      "app/api/admin/users/route.ts",
+    ].map((path) => readFile(new URL(path, root), "utf8")),
+  );
+  routes.forEach((route) => assert.match(route, /requireApiUser\(\)/));
+});
+
+test("public registration and mock dashboard records are absent", async () => {
+  const [authRoute, dashboard] = await Promise.all([
+    readFile(new URL("app/api/auth/[...path]/route.ts", root), "utf8"),
+    readFile(new URL("app/dashboard.tsx", root), "utf8"),
+  ]);
+  assert.match(authRoute, /rejectPublicRegistration/);
+  assert.doesNotMatch(dashboard, /fallbackPeople|clientsSeed|Dillon Reed|Zain Carter/);
+});
+
+test("secret environment variables are server-only", async () => {
+  const files = await Promise.all(
+    [
+      "lib/auth/server.ts",
+      "db/index.ts",
+      "app/api/workspaces/route.ts",
+    ].map((path) => readFile(new URL(path, root), "utf8")),
+  );
+  const source = files.join("\n");
+  assert.doesNotMatch(source, /NEXT_PUBLIC_(DATABASE|POSTGRES|NEON_AUTH_COOKIE)/);
+});

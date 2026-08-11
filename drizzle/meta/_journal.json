@@ -1,5 +1,41 @@
 {
   "version": "7",
-  "dialect": "sqlite",
-  "entries": []
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786425625937,
+      "tag": "0000_production_portal",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786425704858,
+      "tag": "0001_schema_snapshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786427000000,
+      "tag": "0002_database_identifiers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786428500000,
+      "tag": "0003_auth_trusted_origins",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786429000000,
+      "tag": "0004_auth_admin_roles",
+      "breakpoints": true
+    }
+  ]
 }
