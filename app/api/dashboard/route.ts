@@ -131,9 +131,17 @@ export async function GET(request: Request) {
       db
         .select({
           id: meetings.id,
+          lead: meetings.leadName,
+          phone: meetings.phone,
+          email: meetings.email,
+          setter: meetings.setter,
+          closer: meetings.closer,
           date: meetings.scheduledAt,
           status: meetings.status,
           taken: meetings.taken,
+          notes: meetings.notes,
+          recording: meetings.recordingUrl,
+          feedback: meetings.feedback,
         })
         .from(meetings)
         .where(

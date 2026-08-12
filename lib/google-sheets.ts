@@ -35,9 +35,25 @@ export type ImportedDeal = {
 
 export type ImportedMeeting = {
   sourceKey: string;
+  leadName: string;
+  phone: string;
+  email: string;
+  setter: string;
+  closer: string;
   scheduledAt: string;
   status: string;
   taken: boolean;
+  notes: string;
+  recordingUrl: string;
+  feedback: string;
+};
+
+export type ImportedPayout = {
+  sourceKey: string;
+  member: string;
+  date: string;
+  method: string;
+  amount: number;
 };
 
 export type ImportedAttributionEvent = {
@@ -108,6 +124,15 @@ function sourceKey(values: string[]) {
   return createHash("sha256").update(values.join("\u001f")).digest("hex");
 }
 
+function safeHttpUrl(value = "") {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
 function sheetIdFromUrl(value: string) {
   const parsed = new URL(value);
   if (parsed.hostname !== "docs.google.com") throw new Error("Unsupported sheet host");
@@ -135,12 +160,13 @@ async function fetchSheet(spreadsheetId: string, sheet: string) {
 
 export async function importGoogleSheet(sheetUrl: string) {
   const spreadsheetId = sheetIdFromUrl(sheetUrl);
-  const [overview, closedDeals, crm, applicantRows, eventRows] = await Promise.all([
+  const [overview, closedDeals, crm, applicantRows, eventRows, payoutRows] = await Promise.all([
     fetchSheet(spreadsheetId, "System Overview"),
     fetchSheet(spreadsheetId, "Closed Deals"),
     fetchSheet(spreadsheetId, "Sales CRM"),
     fetchSheet(spreadsheetId, "Applications"),
     fetchSheet(spreadsheetId, "Events"),
+    fetchSheet(spreadsheetId, "Payouts"),
   ]);
 
   const section = (name: string, stop: string[]) => {
@@ -248,17 +274,44 @@ export async function importGoogleSheet(sheetUrl: string) {
   });
 
   const meetings: ImportedMeeting[] = crm.flatMap((row) => {
+    if (row[0]?.trim().toLowerCase() === "lead name") return [];
     const scheduledAt = isoDate(row[6]);
     if (!scheduledAt) return [];
     const status = row[3]?.trim() || "booked";
     return [
       {
         sourceKey: sourceKey(row),
+        leadName: row[0]?.trim() || "Unnamed lead",
+        phone: row[1]?.trim() || "",
+        email: row[2]?.trim().toLowerCase() || "",
+        setter: row[4]?.trim() || "",
+        closer: row[5]?.trim() || "",
         scheduledAt,
         status,
-        taken: !/no show|rescheduled|cancel/i.test(status),
+        taken: !/no show|rescheduled|cancel|booked/i.test(status),
+        notes: row[7]?.trim() || "",
+        recordingUrl: safeHttpUrl(row[8]),
+        feedback: row[9]?.trim() || "",
       },
     ];
+  });
+
+  const payouts: ImportedPayout[] = payoutRows.flatMap((row) => {
+    if (row[0]?.trim().toLowerCase() === "payee") return [];
+    const payee = row[0]?.trim() || "";
+    const date = isoDate(row[1]);
+    const method = row[2]?.trim() || "";
+    const amount = numeric(row[3]);
+    if (!payee || !date || !method || amount <= 0) return [];
+    const role = row[4]?.trim() || "Team";
+    const payoutId = row[5]?.trim() || "";
+    return [{
+      sourceKey: payoutId ? `app:${payoutId}` : `sheet:${sourceKey([payee, date, method, String(amount), role])}`,
+      member: `${role}:${payee}`,
+      date,
+      method,
+      amount,
+    }];
   });
 
   const parsedAttributionEvents: ImportedAttributionEvent[] = eventRows.flatMap(
@@ -307,6 +360,7 @@ export async function importGoogleSheet(sheetUrl: string) {
     ],
     deals,
     meetings,
+    payouts,
     attributionEvents,
     applicantCount: applicantRows.length + 17,
   };

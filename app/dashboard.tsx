@@ -46,7 +46,20 @@ type Deal = {
   campaign: string;
   video: string;
 };
-type Meeting = { id: string; date: string; status: string; taken: boolean };
+type Meeting = {
+  id: string;
+  lead: string;
+  phone: string;
+  email: string;
+  setter: string;
+  closer: string;
+  date: string;
+  status: string;
+  taken: boolean;
+  notes: string;
+  recording: string;
+  feedback: string;
+};
 type AttributionEvent = {
   id: string;
   date: string;
@@ -226,6 +239,7 @@ export function Dashboard({
   const [error, setError] = useState("");
   const [tab, setTab] = useState("Overview");
   const [range, setRange] = useState("Last 30 days");
+  const [outcomeFilter, setOutcomeFilter] = useState("All outcomes");
   const [customStart, setCustomStart] = useState(() => {
     const start = new Date();
     start.setDate(start.getDate() - 29);
@@ -235,7 +249,7 @@ export function Dashboard({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [modal, setModal] = useState<
-    "workspace" | "settings" | "payout" | "account" | "edit-account" | null
+    "workspace" | "payout" | "account" | "edit-account" | null
   >(null);
   const [selectedUser, setSelectedUser] = useState<PortalUser | null>(null);
   const [users, setUsers] = useState<PortalUser[]>([]);
@@ -457,10 +471,24 @@ export function Dashboard({
       avatar: String(formData.get("avatar")),
       sheetUrl: String(formData.get("sheetUrl")),
     });
-    setModal(null);
     router.refresh();
     await loadDashboard();
     notify("Client subaccount settings saved");
+  }
+
+  async function deleteWorkspace(formData: FormData) {
+    const confirmationOne = String(formData.get("confirmationOne"));
+    const confirmationTwo = String(formData.get("confirmationTwo"));
+    await submitJson(`/api/workspaces?kind=workspace&workspaceId=${workspaceId}`, "DELETE", {
+      confirmationOne,
+      confirmationTwo,
+    });
+    const response = await fetch("/api/workspaces");
+    const next = ((await response.json()) as { workspaces: Workspace[] }).workspaces;
+    setWorkspaces(next);
+    setWorkspaceId(0);
+    setTab("Overview");
+    notify("Client subaccount permanently deleted");
   }
 
   async function addPayout(formData: FormData) {
@@ -545,9 +573,9 @@ export function Dashboard({
 
   const navigation = [
     "Overview",
-    "Closed Deals",
+    "Sales CRM",
     ...(currentUser.role === "student" ? [] : ["Team", "Payouts"]),
-    ...(currentUser.role === "admin" ? ["Users"] : []),
+    ...(currentUser.role === "admin" ? ["Users", "Settings"] : []),
   ];
   const currentWorkspace = data?.workspace ?? workspaces.find((item) => item.id === workspaceId);
   const pageHeading = workspaceId === 0 && tab === "Overview"
@@ -590,7 +618,7 @@ export function Dashboard({
               className={tab === item ? "active" : ""}
               onClick={() => { setTab(item); setSidebarOpen(false); if (item === "Users") void loadUsers(); }}
             >
-              <span>{item === "Overview" ? "⌂" : item === "Closed Deals" ? "◇" : item === "Team" ? "♙" : item === "Payouts" ? "$" : "⚙"}</span>
+              <span>{item === "Overview" ? "⌂" : item === "Sales CRM" ? "◇" : item === "Team" ? "♙" : item === "Payouts" ? "$" : "⚙"}</span>
               {item}
             </button>
           ))}
@@ -618,7 +646,6 @@ export function Dashboard({
             {data?.permissions.canManage && (
               <div className="title-actions">
                 <button onClick={() => void syncData()}>↻ <span>Sync data</span></button>
-                <button onClick={() => setModal("settings")}>⚙</button>
               </div>
             )}
           </div>
@@ -652,8 +679,8 @@ export function Dashboard({
             </>
           )}
 
-          {!loading && !error && data && tab === "Closed Deals" && (
-            <article className="table-card deals-card"><div className="section-head"><div><h2>Closed deals</h2><p>Normalized live records from Neon</p></div><strong>{period.deals.length} deals</strong></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Setter</th><th>Closer</th><th>Paid through</th><th>Cash</th><th>Offer</th><th>Owed</th><th>Closed</th><th>Next payment</th></tr></thead><tbody>{period.deals.map((deal) => <tr key={deal.id}><td><div><b>{deal.lead}</b><small>{deal.email || deal.phone}</small></div></td><td>{deal.setter || "—"}</td><td>{deal.closer || "—"}</td><td>{deal.method || "—"}</td><td>{money(deal.cash)}</td><td>{money(deal.offer)}</td><td>{money(deal.owed)}</td><td>{deal.date || "—"}</td><td>{deal.next || "—"}</td></tr>)}{!period.deals.length && <tr><td colSpan={9}>No closed deals in this date range.</td></tr>}</tbody></table></div></article>
+          {!loading && !error && data && tab === "Sales CRM" && (
+            <SalesCrm meetings={period.meetings} outcome={outcomeFilter} onOutcomeChange={setOutcomeFilter} />
           )}
 
           {!loading && !error && data && tab === "Team" && <div className="leaderboard-stack team-leaderboards"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
@@ -665,12 +692,31 @@ export function Dashboard({
           {!loading && !error && tab === "Users" && (
             <><div className="payout-head"><div><h2>Portal users</h2><p>Manage roles, status, and client subaccount access.</p></div><button onClick={() => { setSelectedUser(null); setModal("account"); }}>＋ Create account</button></div>{usersLoading ? <div className="state-card">Loading accounts…</div> : <article className="table-card"><div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Subaccounts</th><th>Status</th><th></th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><div><b>{user.name}</b><small>{user.email}</small></div></td><td>{user.role.replace("_", " ")}</td><td>{user.role === "admin" ? "All" : user.workspaceIds.length}</td><td><span className={`status ${user.status}`}>{user.status}</span></td><td><div className="row-actions"><button onClick={() => { setSelectedUser(user); setModal("edit-account"); }}>Edit</button><button className="delete-payout" onClick={() => void toggleUser(user)}>{user.status === "active" ? "Disable" : "Enable"}</button></div></td></tr>)}{!users.length && <tr><td colSpan={5}>No portal accounts yet.</td></tr>}</tbody></table></div></article>}</>
           )}
+
+          {!loading && !error && data && tab === "Settings" && (
+            workspaceId === 0 ? <div className="state-card"><b>Select a client subaccount</b><p>Settings and deletion apply to one client subaccount at a time.</p></div> :
+            <section className="settings-page">
+              <form className="settings-card" onSubmit={(event) => { event.preventDefault(); void updateWorkspace(new FormData(event.currentTarget)).catch((submitError) => notify(submitError instanceof Error ? submitError.message : "Settings could not be saved")); }}>
+                <div><h2>Data source settings</h2><p>Choose the Google Sheet this subaccount imports from.</p></div>
+                <label>Client or offer name</label><input name="name" defaultValue={data.workspace.name} required />
+                <label>Industry / offer type</label><input name="industry" defaultValue={data.workspace.industry} required />
+                <label>Profile image URL</label><input name="avatar" type="url" defaultValue={data.workspace.avatar} />
+                <label>Google Sheets URL</label><input name="sheetUrl" type="url" defaultValue={data.workspace.sheetUrl} placeholder="https://docs.google.com/spreadsheets/d/…" required />
+                <button type="submit">Save settings</button>
+              </form>
+              <form className="settings-card danger-zone" onSubmit={(event) => { event.preventDefault(); void deleteWorkspace(new FormData(event.currentTarget)).catch((submitError) => notify(submitError instanceof Error ? submitError.message : "Subaccount could not be deleted")); }}>
+                <div><h2>Delete this client view</h2><p>This permanently deletes the subaccount and its database records. The Google Sheet itself is not deleted.</p></div>
+                <label>Type <b>{data.workspace.name}</b></label><input name="confirmationOne" autoComplete="off" required />
+                <label>Type the name again</label><input name="confirmationTwo" autoComplete="off" required />
+                <button type="submit">Permanently delete {data.workspace.name}</button>
+              </form>
+            </section>
+          )}
         </div>
       </main>
 
-      {modal && <Modal title={modal === "workspace" ? "Create client subaccount" : modal === "settings" ? "Client subaccount settings" : modal === "payout" ? "Record payout" : modal === "edit-account" ? "Edit portal account" : "Create portal account"} onClose={() => { setModal(null); setSelectedUser(null); }} onSubmit={async (formData) => { try { if (modal === "workspace") await createWorkspace(formData); if (modal === "settings") await updateWorkspace(formData); if (modal === "payout") await addPayout(formData); if (modal === "account") await createAccount(formData); if (modal === "edit-account") await updateAccount(formData); } catch (submitError) { notify(submitError instanceof Error ? submitError.message : "Request failed"); } }}>
+      {modal && <Modal title={modal === "workspace" ? "Create client subaccount" : modal === "payout" ? "Record payout" : modal === "edit-account" ? "Edit portal account" : "Create portal account"} onClose={() => { setModal(null); setSelectedUser(null); }} onSubmit={async (formData) => { try { if (modal === "workspace") await createWorkspace(formData); if (modal === "payout") await addPayout(formData); if (modal === "account") await createAccount(formData); if (modal === "edit-account") await updateAccount(formData); } catch (submitError) { notify(submitError instanceof Error ? submitError.message : "Request failed"); } }}>
         {modal === "workspace" && <><label>Client or offer name</label><input name="name" required minLength={2} /><label>Industry / offer type</label><input name="industry" defaultValue="Client offer" required /></>}
-        {modal === "settings" && <><label>Client or offer name</label><input name="name" defaultValue={data?.workspace.name} required /><label>Industry / offer type</label><input name="industry" defaultValue={data?.workspace.industry} required /><label>Profile image URL</label><input name="avatar" type="url" defaultValue={data?.workspace.avatar} /><label>Google Sheets URL</label><input name="sheetUrl" type="url" defaultValue={data?.workspace.sheetUrl} /><div className="access-note">The sheet is read only by the server. Imported records are normalized into Neon and never exposed through a public sheet proxy.</div></>}
         {modal === "payout" && <><label>Payee</label><select name="member" required>{data?.performance.map((person) => <option key={person.id} value={`${person.role}:${person.name}`}>{person.name} — {person.role}</option>)}</select><label>Date</label><input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /><label>Method</label><select name="method"><option>ACH</option><option>Wire</option><option>Zelle</option><option>PayPal</option><option>Venmo</option><option>Other</option></select><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></>}
         {modal === "account" && <><label>Full name</label><input name="name" required minLength={2} /><label>Email</label><input name="email" type="email" required /><label>Temporary password</label><input name="password" type="password" minLength={12} autoComplete="new-password" required /><small className="field-help">Use 12+ characters and share it through a secure channel. The password is hashed by Neon Auth and is never stored in portal tables.</small><label>Role</label><select name="role"><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} /> {workspace.name}</label>)}</fieldset></>}
         {modal === "edit-account" && selectedUser && <><div className="access-note"><b>{selectedUser.name}</b><br />{selectedUser.email}</div><label>Role</label><select name="role" defaultValue={selectedUser.role}><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><label>Status</label><select name="status" defaultValue={selectedUser.status}><option value="active">Active</option><option value="disabled">Disabled</option></select><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} defaultChecked={selectedUser.workspaceIds.includes(workspace.id)} /> {workspace.name}</label>)}</fieldset></>}
@@ -678,6 +724,18 @@ export function Dashboard({
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </div>
   );
+}
+
+function SalesCrm({ meetings, outcome, onOutcomeChange }: {
+  meetings: Meeting[];
+  outcome: string;
+  onOutcomeChange: (value: string) => void;
+}) {
+  const outcomes = [...new Set(meetings.map((meeting) => meeting.status).filter(Boolean))].sort();
+  const visible = outcome === "All outcomes"
+    ? meetings
+    : meetings.filter((meeting) => meeting.status === outcome);
+  return <><div className="crm-head"><div><h2>Sales CRM</h2><p>All booked calls, outcomes, notes, and recordings from Google Sheets.</p></div><div><label>Outcome</label><select value={outcome} onChange={(event) => onOutcomeChange(event.target.value)}><option>All outcomes</option>{outcomes.map((item) => <option key={item}>{item}</option>)}</select></div></div><article className="table-card crm-card"><div className="section-head"><div><h2>Booked calls</h2><p>{visible.length} of {meetings.length} calls shown</p></div></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Outcome</th><th>Meeting</th><th>Setter</th><th>Closer</th><th>Notes / feedback</th><th>Recording</th></tr></thead><tbody>{visible.map((meeting) => <tr key={meeting.id}><td><div><b>{meeting.lead || "Unnamed lead"}</b><small>{meeting.email || meeting.phone || "No contact details"}</small></div></td><td><span className={`crm-status ${meeting.status.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{meeting.status}</span></td><td>{meeting.date}</td><td>{meeting.setter || "—"}</td><td>{meeting.closer || "—"}</td><td><div className="crm-notes">{meeting.notes || meeting.feedback || "—"}{meeting.notes && meeting.feedback && <small>{meeting.feedback}</small>}</div></td><td>{meeting.recording ? <a className="recording-link" href={meeting.recording} target="_blank" rel="noopener noreferrer">▶ Open call</a> : "—"}</td></tr>)}{!visible.length && <tr><td colSpan={7}>No calls match this outcome and date range.</td></tr>}</tbody></table></div></article></>;
 }
 
 function RankedPerformanceTable({ title, people }: { title: string; people: Person[] }) {

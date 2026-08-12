@@ -100,6 +100,7 @@ export const payouts = pgTable(
     workspaceId: bigint("workspace_id", { mode: "number" })
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
+    sourceKey: text("source_key"),
     member: text("member").notNull(),
     date: date("date", { mode: "string" }).notNull(),
     method: text("method").notNull(),
@@ -118,6 +119,10 @@ export const payouts = pgTable(
   },
   (table) => [
     index("payouts_workspace_date_idx").on(table.workspaceId, table.date),
+    uniqueIndex("payouts_workspace_source_uidx").on(
+      table.workspaceId,
+      table.sourceKey,
+    ),
   ],
 );
 
@@ -270,9 +275,17 @@ export const meetings = pgTable(
       onDelete: "set null",
     }),
     sourceKey: text("source_key").notNull(),
+    leadName: text("lead_name").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    email: text("email").notNull().default(""),
+    setter: text("setter").notNull().default(""),
+    closer: text("closer").notNull().default(""),
     scheduledAt: date("scheduled_at", { mode: "string" }).notNull(),
     status: text("status").notNull().default("booked"),
     taken: boolean("taken").notNull().default(false),
+    notes: text("notes").notNull().default(""),
+    recordingUrl: text("recording_url").notNull().default(""),
+    feedback: text("feedback").notNull().default(""),
     syncedAt: timestamp("synced_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

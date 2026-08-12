@@ -57,6 +57,13 @@
       "when": 1786527000000,
       "tag": "0007_attribution_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786530600000,
+      "tag": "0008_sales_crm_payout_sync",
+      "breakpoints": true
     }
   ]
 }

@@ -1,9 +1,10 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   applicantEvents,
   deals,
   meetings,
+  payouts,
   syncRuns,
   teamMembers,
   teamPerformance,
@@ -125,6 +126,7 @@ export async function POST(
     }
 
     if (imported.meetings.length) {
+      await db.delete(meetings).where(eq(meetings.workspaceId, workspaceId));
       await db
         .insert(meetings)
         .values(
@@ -137,10 +139,37 @@ export async function POST(
         .onConflictDoUpdate({
           target: [meetings.workspaceId, meetings.sourceKey],
           set: {
+            leadName: sql`excluded."lead_name"`,
+            phone: sql`excluded."phone"`,
+            email: sql`excluded."email"`,
+            setter: sql`excluded."setter"`,
+            closer: sql`excluded."closer"`,
             scheduledAt: sql`excluded."scheduled_at"`,
             status: sql`excluded."status"`,
             taken: sql`excluded."taken"`,
+            notes: sql`excluded."notes"`,
+            recordingUrl: sql`excluded."recording_url"`,
+            feedback: sql`excluded."feedback"`,
             syncedAt,
+            updatedAt: syncedAt,
+          },
+        });
+    }
+
+    if (imported.payouts.length) {
+      await db
+        .delete(payouts)
+        .where(and(eq(payouts.workspaceId, workspaceId), isNull(payouts.sourceKey)));
+      await db
+        .insert(payouts)
+        .values(imported.payouts.map((payout) => ({ ...payout, workspaceId })))
+        .onConflictDoUpdate({
+          target: [payouts.workspaceId, payouts.sourceKey],
+          set: {
+            member: sql`excluded."member"`,
+            date: sql`excluded."date"`,
+            method: sql`excluded."method"`,
+            amount: sql`excluded."amount"`,
             updatedAt: syncedAt,
           },
         });
@@ -179,6 +208,7 @@ export async function POST(
       imported.people.length +
       imported.deals.length +
       imported.meetings.length +
+      imported.payouts.length +
       imported.attributionEvents.length;
     await db
       .update(syncRuns)
