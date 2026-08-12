@@ -1,6 +1,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  applicantEvents,
   deals,
   meetings,
   payouts,
@@ -35,7 +36,8 @@ export async function GET(request: Request) {
     performanceRows,
     dealRows,
     meetingRows,
-    applicantCountRows,
+    applicantRows,
+    applicantBaselineRows,
     payoutRows,
     syncRows,
   ] =
@@ -109,6 +111,10 @@ export async function GET(request: Request) {
           date: deals.closedAt,
           next: deals.nextPaymentAt,
           end: deals.contractEndAt,
+          source: deals.attributionSource,
+          medium: deals.attributionMedium,
+          campaign: deals.attributionCampaign,
+          video: deals.attributionVideo,
         })
         .from(deals)
         .where(
@@ -142,18 +148,26 @@ export async function GET(request: Request) {
         )
         .orderBy(desc(meetings.scheduledAt)),
       isStudent
+        ? Promise.resolve([])
+        : db
+            .select({
+              id: applicantEvents.id,
+              date: applicantEvents.occurredAt,
+              event: applicantEvents.eventName,
+              source: applicantEvents.source,
+              medium: applicantEvents.medium,
+              campaign: applicantEvents.campaign,
+              content: applicantEvents.content,
+              video: applicantEvents.videoId,
+            })
+            .from(applicantEvents)
+            .where(isAgency ? undefined : eq(applicantEvents.workspaceId, workspaceId))
+            .orderBy(desc(applicantEvents.occurredAt)),
+      isStudent
         ? Promise.resolve([{ value: 0 }])
         : isAgency
-          ? db
-              .select({
-                value: sql<number>`coalesce(sum(${workspaces.applicantCount}), 0)`,
-              })
-              .from(workspaces)
-          : db
-              .select({ value: workspaces.applicantCount })
-              .from(workspaces)
-              .where(eq(workspaces.id, workspaceId))
-              .limit(1),
+          ? db.select({ value: sql<number>`count(*) * 17` }).from(workspaces)
+          : Promise.resolve([{ value: 17 }]),
       isStudent
         ? Promise.resolve([])
         : db
@@ -192,7 +206,8 @@ export async function GET(request: Request) {
     performance: performanceRows,
     deals: dealRows,
     meetings: meetingRows,
-    applicantCount: Number(applicantCountRows[0]?.value ?? 0),
+    attributionEvents: applicantRows,
+    applicantBaseline: Number(applicantBaselineRows[0]?.value ?? 0),
     payouts: payoutRows,
     lastSync: syncRows[0] ?? null,
     permissions: {

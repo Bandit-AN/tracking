@@ -50,6 +50,13 @@
       "when": 1786522200000,
       "tag": "0006_workspace_applicant_count",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786527000000,
+      "tag": "0007_attribution_fields",
+      "breakpoints": true
     }
   ]
 }

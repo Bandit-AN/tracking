@@ -211,6 +211,10 @@ export const deals = pgTable(
     setter: text("setter").notNull().default(""),
     closer: text("closer").notNull().default(""),
     paymentMethod: text("payment_method").notNull().default(""),
+    attributionSource: text("attribution_source").notNull().default(""),
+    attributionMedium: text("attribution_medium").notNull().default(""),
+    attributionCampaign: text("attribution_campaign").notNull().default(""),
+    attributionVideo: text("attribution_video").notNull().default(""),
     cashCollected: numeric("cash_collected", {
       precision: 14,
       scale: 2,
@@ -302,6 +306,12 @@ export const applicantEvents = pgTable(
     sourceKey: text("source_key").notNull(),
     occurredAt: date("occurred_at", { mode: "string" }).notNull(),
     eventName: text("event_name").notNull().default("application_submitted"),
+    source: text("source").notNull().default(""),
+    medium: text("medium").notNull().default(""),
+    campaign: text("campaign").notNull().default(""),
+    content: text("content").notNull().default(""),
+    videoId: text("video_id").notNull().default(""),
+    landingPage: text("landing_page").notNull().default(""),
     syncedAt: timestamp("synced_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

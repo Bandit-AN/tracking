@@ -1,6 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  applicantEvents,
   deals,
   meetings,
   syncRuns,
@@ -107,6 +108,10 @@ export async function POST(
             setter: sql`excluded."setter"`,
             closer: sql`excluded."closer"`,
             paymentMethod: sql`excluded."payment_method"`,
+            attributionSource: sql`excluded."attribution_source"`,
+            attributionMedium: sql`excluded."attribution_medium"`,
+            attributionCampaign: sql`excluded."attribution_campaign"`,
+            attributionVideo: sql`excluded."attribution_video"`,
             cashCollected: sql`excluded."cash_collected"`,
             offerAmount: sql`excluded."offer_amount"`,
             amountOwed: sql`excluded."amount_owed"`,
@@ -141,11 +146,37 @@ export async function POST(
         });
     }
 
+    if (imported.attributionEvents.length) {
+      await db
+        .insert(applicantEvents)
+        .values(
+          imported.attributionEvents.map((event) => ({
+            ...event,
+            workspaceId,
+            syncedAt,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [applicantEvents.workspaceId, applicantEvents.sourceKey],
+          set: {
+            occurredAt: sql`excluded."occurred_at"`,
+            eventName: sql`excluded."event_name"`,
+            source: sql`excluded."source"`,
+            medium: sql`excluded."medium"`,
+            campaign: sql`excluded."campaign"`,
+            content: sql`excluded."content"`,
+            videoId: sql`excluded."video_id"`,
+            landingPage: sql`excluded."landing_page"`,
+            syncedAt,
+          },
+        });
+    }
+
     const recordsImported =
       imported.people.length +
       imported.deals.length +
       imported.meetings.length +
-      Math.max(0, imported.applicantCount - 17);
+      imported.attributionEvents.length;
     await db
       .update(syncRuns)
       .set({ status: "succeeded", recordsImported, finishedAt: new Date() })

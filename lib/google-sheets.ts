@@ -21,6 +21,10 @@ export type ImportedDeal = {
   setter: string;
   closer: string;
   paymentMethod: string;
+  attributionSource: string;
+  attributionMedium: string;
+  attributionCampaign: string;
+  attributionVideo: string;
   cashCollected: number;
   offerAmount: number;
   amountOwed: number;
@@ -34,6 +38,18 @@ export type ImportedMeeting = {
   scheduledAt: string;
   status: string;
   taken: boolean;
+};
+
+export type ImportedAttributionEvent = {
+  sourceKey: string;
+  occurredAt: string;
+  eventName: "page_view" | "application_submitted";
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+  videoId: string;
+  landingPage: string;
 };
 
 function parseCsv(text: string) {
@@ -119,11 +135,11 @@ async function fetchSheet(spreadsheetId: string, sheet: string) {
 
 export async function importGoogleSheet(sheetUrl: string) {
   const spreadsheetId = sheetIdFromUrl(sheetUrl);
-  const [overview, closedDeals, crm, applicantRows] = await Promise.all([
+  const [overview, closedDeals, crm, eventRows] = await Promise.all([
     fetchSheet(spreadsheetId, "System Overview"),
     fetchSheet(spreadsheetId, "Closed Deals"),
     fetchSheet(spreadsheetId, "Sales CRM"),
-    fetchSheet(spreadsheetId, "Applicants"),
+    fetchSheet(spreadsheetId, "Events"),
   ]);
 
   const section = (name: string, stop: string[]) => {
@@ -158,6 +174,15 @@ export async function importGoogleSheet(sheetUrl: string) {
     dealHeader >= 0
       ? closedDeals.slice(dealHeader + 1).filter((row) => row[0]?.trim())
       : [];
+  const dealHeaders = closedDeals[dealHeader] ?? [];
+  const dealColumn = (...names: string[]) =>
+    dealHeaders.findIndex((header) =>
+      names.includes(header.trim().toLowerCase()),
+    );
+  const optionalDealValue = (row: string[], ...names: string[]) => {
+    const index = dealColumn(...names);
+    return index >= 0 ? row[index]?.trim() || "" : "";
+  };
 
   const deals: ImportedDeal[] = dealRows.map((row) => ({
     sourceKey: sourceKey(row.slice(0, 12)),
@@ -167,6 +192,10 @@ export async function importGoogleSheet(sheetUrl: string) {
     setter: row[3]?.trim() || "",
     closer: row[4]?.trim() || "",
     paymentMethod: row[5]?.trim() || "",
+    attributionSource: optionalDealValue(row, "source", "attribution source", "utm source"),
+    attributionMedium: optionalDealValue(row, "medium", "attribution medium", "utm medium"),
+    attributionCampaign: optionalDealValue(row, "campaign", "attribution campaign", "utm campaign"),
+    attributionVideo: optionalDealValue(row, "video", "video id", "youtube video", "utm content"),
     cashCollected: numeric(row[6]),
     offerAmount: numeric(row[7]),
     amountOwed: numeric(row[8]),
@@ -189,6 +218,36 @@ export async function importGoogleSheet(sheetUrl: string) {
     ];
   });
 
+  const attributionEvents: ImportedAttributionEvent[] = eventRows.flatMap(
+    (row, index) => {
+      if (index === 0 && row[0]?.startsWith("timestamp ")) {
+        const timestamps = row[0].trim().split(/\s+/).slice(1);
+        const eventNames = row[1]?.trim().split(/\s+/).slice(1) ?? [];
+        return timestamps.flatMap((timestamp, eventIndex) => {
+          const eventName = eventNames[eventIndex];
+          const occurredAt = timestamp.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+          if (!occurredAt || (eventName !== "page_view" && eventName !== "application_submitted")) return [];
+          return [{ sourceKey: sourceKey([timestamp, eventName]), occurredAt, eventName, source: "", medium: "", campaign: "", content: "", videoId: "", landingPage: "" }];
+        });
+      }
+      const timestamp = row[0]?.trim() ?? "";
+      const eventName = row[1]?.trim();
+      const occurredAt = timestamp.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+      if (!occurredAt || (eventName !== "page_view" && eventName !== "application_submitted")) return [];
+      return [{
+        sourceKey: sourceKey([timestamp, eventName, row[6] ?? "", row[8] ?? ""]),
+        occurredAt,
+        eventName,
+        source: row[6]?.trim().toLowerCase() || "",
+        medium: row[7]?.trim().toLowerCase() || "",
+        campaign: row[8]?.trim() || "",
+        content: row[9]?.trim() || "",
+        videoId: row[10]?.trim() || "",
+        landingPage: row[11]?.trim() || "",
+      }];
+    },
+  );
+
   return {
     people: [
       ...peopleFromRows(section("Setter Name", ["Closer Name"]), "setter"),
@@ -197,6 +256,8 @@ export async function importGoogleSheet(sheetUrl: string) {
     ],
     deals,
     meetings,
-    applicantCount: applicantRows.length + 17,
+    attributionEvents,
+    applicantCount:
+      attributionEvents.filter((event) => event.eventName === "application_submitted").length + 17,
   };
 }

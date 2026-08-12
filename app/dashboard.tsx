@@ -41,8 +41,22 @@ type Deal = {
   date: string | null;
   next: string | null;
   end: string | null;
+  source: string;
+  medium: string;
+  campaign: string;
+  video: string;
 };
 type Meeting = { id: string; date: string; status: string; taken: boolean };
+type AttributionEvent = {
+  id: string;
+  date: string;
+  event: "page_view" | "application_submitted";
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+  video: string;
+};
 type Payout = {
   id: number;
   workspaceId: number;
@@ -56,7 +70,8 @@ type DashboardData = {
   performance: Person[];
   deals: Deal[];
   meetings: Meeting[];
-  applicantCount: number;
+  attributionEvents: AttributionEvent[];
+  applicantBaseline: number;
   payouts: Payout[];
   lastSync: {
     status: string;
@@ -106,6 +121,7 @@ function rangeStart(range: string, now: Date) {
 
 function Chart({ data, labels }: { data: number[]; labels: string[] }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const [hovered, setHovered] = useState<number | null>(null);
   useEffect(() => {
     const element = canvas.current;
     if (!element) return;
@@ -142,12 +158,22 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
       context.strokeStyle = "#8b6cff";
       context.lineWidth = 2.5;
       context.stroke();
+      points.forEach((point, index) => {
+        if (index !== hovered) return;
+        context.beginPath();
+        context.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        context.fillStyle = "#f8f5ff";
+        context.fill();
+        context.lineWidth = 3;
+        context.strokeStyle = "#8b6cff";
+        context.stroke();
+      });
     };
     render();
     const observer = new ResizeObserver(render);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [data]);
+  }, [data, hovered]);
   return (
     <article className="chart-card">
       <div className="chart-head">
@@ -156,11 +182,26 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
         </div>
         <strong>{money(data.reduce((sum, value) => sum + value, 0))}</strong>
       </div>
-      <canvas ref={canvas} aria-label="Cash collected over time" />
+      <div className="chart-canvas-wrap">
+        <canvas
+          ref={canvas}
+          aria-label="Cash collected over time"
+          onMouseMove={(event) => {
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const count = Math.max(data.length - 1, 1);
+            const index = Math.round(((event.clientX - bounds.left - 8) / Math.max(bounds.width - 16, 1)) * count);
+            setHovered(Math.max(0, Math.min(data.length - 1, index)));
+          }}
+          onMouseLeave={() => setHovered(null)}
+        />
+        {hovered !== null && data[hovered] !== undefined && (
+          <div className="chart-tooltip" style={{ left: `${8 + (hovered / Math.max(data.length - 1, 1)) * 84}%` }}>
+            <span>{labels[hovered]}</span><strong>{money(data[hovered])}</strong>
+          </div>
+        )}
+      </div>
       <div className="chart-axis">
-        {labels.map((label, index) => (
-          <span key={`${label}-${index}`}>{label}</span>
-        ))}
+        {labels.map((label, index) => index % Math.max(1, Math.ceil(labels.length / 6)) === 0 || index === labels.length - 1 ? <span key={`${label}-${index}`}>{label}</span> : null)}
       </div>
     </article>
   );
@@ -271,16 +312,21 @@ export function Dashboard({
     };
     const deals = (data?.deals ?? []).filter((deal) => inRange(deal.date));
     const meetings = (data?.meetings ?? []).filter((meeting) => inRange(meeting.date));
+    const attributionEvents = (data?.attributionEvents ?? []).filter((event) => inRange(event.date));
     const payouts = (data?.payouts ?? []).filter((payout) => inRange(payout.date));
-    const bucketCount = 6;
+    const earliestDeal = deals.map((deal) => deal.date).filter(Boolean).sort()[0];
+    const chartStart = range === "All time" && earliestDeal
+      ? new Date(`${earliestDeal}T00:00:00`)
+      : start;
     const totalDays = Math.max(
       1,
-      Math.ceil((now.getTime() - start.getTime()) / 86_400_000) + 1,
+      Math.ceil((now.getTime() - chartStart.getTime()) / 86_400_000) + 1,
     );
+    const bucketCount = Math.min(totalDays, 120);
     const bucketDays = Math.max(1, Math.ceil(totalDays / bucketCount));
     const series = Array(bucketCount).fill(0) as number[];
     const labels = Array.from({ length: bucketCount }, (_, index) => {
-      const date = new Date(start);
+      const date = new Date(chartStart);
       date.setDate(date.getDate() + index * bucketDays);
       return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     });
@@ -288,7 +334,7 @@ export function Dashboard({
       const date = new Date(`${deal.date}T12:00:00`);
       const index = Math.min(
         bucketCount - 1,
-        Math.max(0, Math.floor((date.getTime() - start.getTime()) / 86_400_000 / bucketDays)),
+        Math.max(0, Math.floor((date.getTime() - chartStart.getTime()) / 86_400_000 / bucketDays)),
       );
       series[index] += deal.cash;
     });
@@ -319,6 +365,36 @@ export function Dashboard({
       );
     };
     const taken = meetings.filter((meeting) => meeting.taken).length;
+    const applications = attributionEvents.filter((event) => event.event === "application_submitted");
+    const sourceAttribution = new Map<string, { source: string; deals: number; cash: number; revenue: number }>();
+    for (const deal of deals) {
+      const source = deal.source.trim() || "Unattributed";
+      const key = source.toLowerCase();
+      const item = sourceAttribution.get(key) ?? { source, deals: 0, cash: 0, revenue: 0 };
+      item.deals += 1;
+      item.cash += deal.cash;
+      item.revenue += deal.offer;
+      sourceAttribution.set(key, item);
+    }
+    const youtube = new Map<string, { video: string; views: number; applicants: number; deals: number; cash: number }>();
+    for (const event of attributionEvents) {
+      if (event.source !== "youtube") continue;
+      const video = event.video || event.content || event.campaign || "Unlabeled YouTube traffic";
+      const key = video.toLowerCase();
+      const item = youtube.get(key) ?? { video, views: 0, applicants: 0, deals: 0, cash: 0 };
+      if (event.event === "page_view") item.views += 1;
+      if (event.event === "application_submitted") item.applicants += 1;
+      youtube.set(key, item);
+    }
+    for (const deal of deals) {
+      if (deal.source.toLowerCase() !== "youtube") continue;
+      const video = deal.video || deal.campaign || "Unlabeled YouTube traffic";
+      const key = video.toLowerCase();
+      const item = youtube.get(key) ?? { video, views: 0, applicants: 0, deals: 0, cash: 0 };
+      item.deals += 1;
+      item.cash += deal.cash;
+      youtube.set(key, item);
+    }
     return {
       deals,
       meetings,
@@ -328,6 +404,13 @@ export function Dashboard({
       cash: deals.reduce((sum, deal) => sum + deal.cash, 0),
       revenue: deals.reduce((sum, deal) => sum + deal.offer, 0),
       taken,
+      applicants: applications.length + (data?.applicantBaseline ?? 0),
+      sourceAttribution: [...sourceAttribution.values()].sort((left, right) => right.deals - left.deals),
+      youtube: [...youtube.values()].sort((left, right) => {
+        const leftRate = left.views ? left.applicants / left.views : 0;
+        const rightRate = right.views ? right.applicants / right.views : 0;
+        return right.cash - left.cash || rightRate - leftRate;
+      }),
       closers: rankByCash("closer"),
       setters: rankByCash("setter"),
     };
@@ -461,6 +544,9 @@ export function Dashboard({
     ...(currentUser.role === "admin" ? ["Users"] : []),
   ];
   const currentWorkspace = data?.workspace ?? workspaces.find((item) => item.id === workspaceId);
+  const pageHeading = workspaceId === 0 && tab === "Overview"
+    ? "Agency Overview"
+    : `${currentWorkspace?.name ?? "MoonRift Media"}${tab === "Overview" ? " Overview" : ` ${tab}`}`;
 
   return (
     <div className="app-shell">
@@ -514,13 +600,13 @@ export function Dashboard({
       <main className="content">
         <header className="topbar">
           <button className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">☰</button>
-          <div><b>MoonRift Media Client Portal</b><small>Secure offer intelligence</small></div>
+          <div><b>MoonRift Media Client Portal</b></div>
           <span className="live-badge"><i /> Live database</span>
         </header>
         <div className="dashboard">
           <div className="page-title">
             <div>
-              <h1>{currentWorkspace?.name ?? "MoonRift Media"} <span>{tab}</span></h1>
+              <h1>{pageHeading}</h1>
               <p>{workspaceId === 0 ? "Agency-wide performance across every client offer." : "Live sales, team performance, and payouts for this client offer."}</p>
             </div>
             {data?.permissions.canManage && (
@@ -544,7 +630,7 @@ export function Dashboard({
               <section className="kpi-grid">
                 <article className="kpi"><span>Cash collected</span><strong>{money(period.cash)}</strong></article>
                 <article className="kpi"><span>Revenue contracted</span><strong>{money(period.revenue)}</strong></article>
-                <article className="kpi"><span>Applicants</span><strong>{data.applicantCount}</strong></article>
+                <article className="kpi"><span>Applicants</span><strong>{period.applicants}</strong></article>
                 <article className="kpi"><span>Closed deals</span><strong>{period.deals.length}</strong></article>
                 <article className="kpi"><span>Meetings taken</span><strong>{period.taken}</strong></article>
                 <article className="kpi"><span>Show rate</span><strong>{period.meetings.length ? Math.round((period.taken / period.meetings.length) * 100) : 0}%</strong></article>
@@ -553,9 +639,10 @@ export function Dashboard({
               </section>
               <Chart data={period.series} labels={period.labels} />
               <div className="performance-layout">
-                <ConversionFunnel applicants={data.applicantCount} booked={period.meetings.length} taken={period.taken} closed={period.deals.length} />
+                <ConversionFunnel applicants={period.applicants} booked={period.meetings.length} taken={period.taken} closed={period.deals.length} />
                 {data.permissions.canViewTeam && <div className="leaderboard-stack"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
               </div>
+              <AttributionSection sources={period.sourceAttribution} youtube={period.youtube} totalDeals={period.deals.length} />
             </>
           )}
 
@@ -598,7 +685,20 @@ function ConversionFunnel({ applicants, booked, taken, closed }: { applicants: n
     { label: "Meetings taken", value: taken, width: "64%" },
     { label: "Closed", value: closed, width: "46%" },
   ];
-  return <article className="funnel-card" aria-label="Offer conversion funnel"><div className="section-head"><div><h2>Offer funnel</h2><p>Current applicants and selected-period conversions</p></div></div><div className="funnel-visual">{stages.map((stage, index) => <div className={`funnel-stage stage-${index + 1}`} style={{ width: stage.width }} key={stage.label}><span>{stage.label}</span><strong>{stage.value}</strong></div>)}</div></article>;
+  return <article className="funnel-card" aria-label="Offer conversion funnel"><div className="section-head"><div><h2>Offer funnel</h2><p>Current applicants and selected-period conversions</p></div></div><div className="funnel-visual">{stages.map((stage, index) => { const next = stages[index + 1]; const advance = next && stage.value ? Math.round((next.value / stage.value) * 100) : 0; return <div className="funnel-step" key={stage.label}><div className={`funnel-stage stage-${index + 1}`} style={{ width: stage.width }}><span>{stage.label}</span><strong>{stage.value}</strong></div>{next && <div className="funnel-transition"><strong>{advance}% advance</strong><span>{100 - advance}% drop-off</span></div>}</div>; })}</div></article>;
+}
+
+function AttributionSection({ sources, youtube, totalDeals }: {
+  sources: Array<{ source: string; deals: number; cash: number; revenue: number }>;
+  youtube: Array<{ video: string; views: number; applicants: number; deals: number; cash: number }>;
+  totalDeals: number;
+}) {
+  const bestVideo = [...youtube].sort((left, right) => {
+    const leftRate = left.views ? left.applicants / left.views : 0;
+    const rightRate = right.views ? right.applicants / right.views : 0;
+    return rightRate - leftRate || right.cash - left.cash;
+  })[0];
+  return <section className="attribution-section" aria-label="Marketing attribution"><div className="attribution-heading"><div><span>ATTRIBUTION</span><h2>Where closed deals come from</h2><p>Closed-deal share and YouTube campaign performance for the selected date range.</p></div>{bestVideo && <div className="best-video"><span>Best YouTube conversion</span><strong>{bestVideo.video}</strong><small>{bestVideo.views ? Math.round((bestVideo.applicants / bestVideo.views) * 100) : 0}% visitor-to-applicant</small></div>}</div><div className="attribution-grid"><article className="attribution-card"><div className="section-head"><div><h2>Closed deals by source</h2><p>Percentage of selected-period deals</p></div></div><div className="source-list">{sources.map((source) => { const percentage = totalDeals ? Math.round((source.deals / totalDeals) * 100) : 0; return <div className="source-row" key={source.source}><div><b>{source.source}</b><span>{source.deals} deals · {money(source.cash)}</span></div><strong>{percentage}%</strong><i><span style={{ width: `${percentage}%` }} /></i></div>; })}{!sources.length && <p className="attribution-empty">No closed deals in this date range.</p>}</div></article><article className="attribution-card"><div className="section-head"><div><h2>YouTube video performance</h2><p>Campaign conversion and attributed cash</p></div></div><div className="table-wrap"><table><thead><tr><th>Video / campaign</th><th>Views</th><th>Applicants</th><th>Conversion</th><th>Deals</th><th>Cash made</th></tr></thead><tbody>{youtube.map((video) => <tr key={video.video}><td><b>{video.video}</b></td><td>{video.views}</td><td>{video.applicants}</td><td>{video.views ? Math.round((video.applicants / video.views) * 100) : 0}%</td><td>{video.deals}</td><td><b>{money(video.cash)}</b></td></tr>)}{!youtube.length && <tr><td colSpan={6}>No YouTube-attributed traffic in this date range.</td></tr>}</tbody></table></div></article></div><p className="attribution-note">Deals without a Source column in the Closed Deals sheet remain Unattributed. Add Source, Medium, Campaign, and Video columns to connect revenue to each platform and YouTube video.</p></section>;
 }
 
 function Modal({ title, onClose, onSubmit, children }: { title: string; onClose: () => void; onSubmit: (formData: FormData) => Promise<void>; children: React.ReactNode }) {

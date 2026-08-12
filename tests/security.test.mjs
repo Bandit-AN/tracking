@@ -59,6 +59,11 @@ test("authenticated dashboard retains its responsive layout hooks", async () => 
   assert.equal((dashboard.match(/<article className="kpi">/g) ?? []).length, 8);
   assert.doesNotMatch(dashboard, /className="kpi">[^<]*<span>[^<]+<\/span><strong>[^<]+<\/strong><small>/);
   assert.doesNotMatch(dashboard, /Database current/);
+  assert.doesNotMatch(dashboard, /Secure offer intelligence/);
+  assert.match(dashboard, /Agency Overview/);
+  assert.match(dashboard, /AttributionSection/);
+  assert.match(dashboard, /chart-tooltip/);
+  assert.match(dashboard, /drop-off/);
   assert.match(dashboard, /className="performance-layout"/);
   assert.match(dashboard, /className="leaderboard-stack"/);
   assert.match(dashboard, /Top closers/);
