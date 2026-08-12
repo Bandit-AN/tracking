@@ -376,10 +376,16 @@ export function Dashboard({
       item.revenue += deal.offer;
       sourceAttribution.set(key, item);
     }
+    const youtubeLabel = (video: string, content: string, campaign: string, medium = "") => {
+      if (medium.trim().toLowerCase() === "bio link" || campaign.trim().toLowerCase() === "organic") {
+        return "yt-bio";
+      }
+      return video || content || campaign || "Unlabeled YouTube traffic";
+    };
     const youtube = new Map<string, { video: string; views: number; applicants: number; deals: number; cash: number }>();
     for (const event of attributionEvents) {
       if (event.source !== "youtube") continue;
-      const video = event.video || event.content || event.campaign || "Unlabeled YouTube traffic";
+      const video = youtubeLabel(event.video, event.content, event.campaign, event.medium);
       const key = video.toLowerCase();
       const item = youtube.get(key) ?? { video, views: 0, applicants: 0, deals: 0, cash: 0 };
       if (event.event === "page_view") item.views += 1;
@@ -388,7 +394,7 @@ export function Dashboard({
     }
     for (const deal of deals) {
       if (deal.source.toLowerCase() !== "youtube") continue;
-      const video = deal.video || deal.campaign || "Unlabeled YouTube traffic";
+      const video = youtubeLabel(deal.video, "", deal.campaign, deal.medium);
       const key = video.toLowerCase();
       const item = youtube.get(key) ?? { video, views: 0, applicants: 0, deals: 0, cash: 0 };
       item.deals += 1;
@@ -698,7 +704,7 @@ function AttributionSection({ sources, youtube, totalDeals }: {
     const rightRate = right.views ? right.applicants / right.views : 0;
     return rightRate - leftRate || right.cash - left.cash;
   })[0];
-  return <section className="attribution-section" aria-label="Marketing attribution"><div className="attribution-heading"><div><span>ATTRIBUTION</span><h2>Where closed deals come from</h2><p>Closed-deal share and YouTube campaign performance for the selected date range.</p></div>{bestVideo && <div className="best-video"><span>Best YouTube conversion</span><strong>{bestVideo.video}</strong><small>{bestVideo.views ? Math.round((bestVideo.applicants / bestVideo.views) * 100) : 0}% visitor-to-applicant</small></div>}</div><div className="attribution-grid"><article className="attribution-card"><div className="section-head"><div><h2>Closed deals by source</h2><p>Percentage of selected-period deals</p></div></div><div className="source-list">{sources.map((source) => { const percentage = totalDeals ? Math.round((source.deals / totalDeals) * 100) : 0; return <div className="source-row" key={source.source}><div><b>{source.source}</b><span>{source.deals} deals · {money(source.cash)}</span></div><strong>{percentage}%</strong><i><span style={{ width: `${percentage}%` }} /></i></div>; })}{!sources.length && <p className="attribution-empty">No closed deals in this date range.</p>}</div></article><article className="attribution-card"><div className="section-head"><div><h2>YouTube video performance</h2><p>Campaign conversion and attributed cash</p></div></div><div className="table-wrap"><table><thead><tr><th>Video / campaign</th><th>Views</th><th>Applicants</th><th>Conversion</th><th>Deals</th><th>Cash made</th></tr></thead><tbody>{youtube.map((video) => <tr key={video.video}><td><b>{video.video}</b></td><td>{video.views}</td><td>{video.applicants}</td><td>{video.views ? Math.round((video.applicants / video.views) * 100) : 0}%</td><td>{video.deals}</td><td><b>{money(video.cash)}</b></td></tr>)}{!youtube.length && <tr><td colSpan={6}>No YouTube-attributed traffic in this date range.</td></tr>}</tbody></table></div></article></div><p className="attribution-note">Deals without a Source column in the Closed Deals sheet remain Unattributed. Add Source, Medium, Campaign, and Video columns to connect revenue to each platform and YouTube video.</p></section>;
+  return <section className="attribution-section" aria-label="Marketing attribution"><div className="attribution-heading"><div><span>ATTRIBUTION</span><h2>Where closed deals come from</h2><p>Closed-deal share and YouTube campaign performance for the selected date range.</p></div>{bestVideo && <div className="best-video"><span>Best YouTube conversion</span><strong>{bestVideo.video}</strong><small>{bestVideo.views ? Math.round((bestVideo.applicants / bestVideo.views) * 100) : 0}% visitor-to-applicant</small></div>}</div><div className="attribution-grid"><article className="attribution-card"><div className="section-head"><div><h2>Closed deals by source</h2><p>Percentage of selected-period deals</p></div></div><div className="source-list">{sources.map((source) => { const percentage = totalDeals ? Math.round((source.deals / totalDeals) * 100) : 0; return <div className="source-row" key={source.source}><div><b>{source.source}</b><span>{source.deals} deals · {money(source.cash)}</span></div><strong>{percentage}%</strong><i><span style={{ width: `${percentage}%` }} /></i></div>; })}{!sources.length && <p className="attribution-empty">No closed deals in this date range.</p>}</div></article><article className="attribution-card"><div className="section-head"><div><h2>YouTube landing-page performance</h2><p>UTM landing visits, applications, and attributed cash</p></div></div><div className="table-wrap"><table><thead><tr><th>Video / campaign</th><th>Landing visits</th><th>Applicants</th><th>Conversion</th><th>Deals</th><th>Cash made</th></tr></thead><tbody>{youtube.map((video) => <tr key={video.video}><td><b>{video.video}</b></td><td>{video.views}</td><td>{video.applicants}</td><td>{video.views ? Math.round((video.applicants / video.views) * 100) : 0}%</td><td>{video.deals}</td><td><b>{money(video.cash)}</b></td></tr>)}{!youtube.length && <tr><td colSpan={6}>No YouTube-attributed traffic in this date range.</td></tr>}</tbody></table></div></article></div><p className="attribution-note">Landing visits are website page-view events with YouTube UTMs, not YouTube video views. Closed-deal Source, Medium, Campaign, and Video fields connect revenue to each platform and video.</p></section>;
 }
 
 function Modal({ title, onClose, onSubmit, children }: { title: string; onClose: () => void; onSubmit: (formData: FormData) => Promise<void>; children: React.ReactNode }) {
