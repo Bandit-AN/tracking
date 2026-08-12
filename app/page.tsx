@@ -1,5 +1,9 @@
-import { Dashboard } from "./dashboard";
+import { auth } from "@/lib/auth/server";
+import { redirect } from "next/navigation";
 
-export default function Home() {
-  return <Dashboard />;
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const { data } = await auth.getSession();
+  redirect(data?.user ? "/dashboard" : "/auth/sign-in");
 }

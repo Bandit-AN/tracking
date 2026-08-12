@@ -12,11 +12,12 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
   const image = `${protocol}://${host}/og.png`;
   return {
-    title: "MoonRift — Client Revenue Intelligence",
-    description: "A modern multi-client sales and revenue performance dashboard.",
+    metadataBase: new URL(`${protocol}://${host}`),
+    title: "MoonRift Media Client Portal",
+    description: "Secure client offer, sales, revenue, team, and payout intelligence.",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title: "MoonRift", description: "Every client. One clear view.", images: [{ url: image, width: 1792, height: 915 }] },
-    twitter: { card: "summary_large_image", title: "MoonRift", description: "Every client. One clear view.", images: [image] },
+    openGraph: { title: "MoonRift Media Client Portal", description: "Secure offer and revenue intelligence by MoonRift Media.", images: [{ url: image, width: 1792, height: 915 }] },
+    twitter: { card: "summary_large_image", title: "MoonRift Media Client Portal", description: "Secure offer and revenue intelligence by MoonRift Media.", images: [image] },
   };
 }
 
