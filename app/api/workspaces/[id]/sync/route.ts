@@ -148,6 +148,9 @@ export async function POST(
 
     if (imported.attributionEvents.length) {
       await db
+        .delete(applicantEvents)
+        .where(eq(applicantEvents.workspaceId, workspaceId));
+      await db
         .insert(applicantEvents)
         .values(
           imported.attributionEvents.map((event) => ({

@@ -135,10 +135,11 @@ async function fetchSheet(spreadsheetId: string, sheet: string) {
 
 export async function importGoogleSheet(sheetUrl: string) {
   const spreadsheetId = sheetIdFromUrl(sheetUrl);
-  const [overview, closedDeals, crm, eventRows] = await Promise.all([
+  const [overview, closedDeals, crm, applicantRows, eventRows] = await Promise.all([
     fetchSheet(spreadsheetId, "System Overview"),
     fetchSheet(spreadsheetId, "Closed Deals"),
     fetchSheet(spreadsheetId, "Sales CRM"),
+    fetchSheet(spreadsheetId, "Applicants"),
     fetchSheet(spreadsheetId, "Events"),
   ]);
 
@@ -218,7 +219,7 @@ export async function importGoogleSheet(sheetUrl: string) {
     ];
   });
 
-  const attributionEvents: ImportedAttributionEvent[] = eventRows.flatMap(
+  const parsedAttributionEvents: ImportedAttributionEvent[] = eventRows.flatMap(
     (row, index) => {
       if (index === 0 && row[0]?.startsWith("timestamp ")) {
         const timestamps = row[0].trim().split(/\s+/).slice(1);
@@ -247,6 +248,14 @@ export async function importGoogleSheet(sheetUrl: string) {
       }];
     },
   );
+  const submissionLimit = applicantRows.length;
+  const datedSubmissions = parsedAttributionEvents
+    .filter((event) => event.eventName === "application_submitted")
+    .slice(-submissionLimit);
+  const attributionEvents = [
+    ...parsedAttributionEvents.filter((event) => event.eventName === "page_view"),
+    ...datedSubmissions,
+  ];
 
   return {
     people: [
@@ -257,7 +266,6 @@ export async function importGoogleSheet(sheetUrl: string) {
     deals,
     meetings,
     attributionEvents,
-    applicantCount:
-      attributionEvents.filter((event) => event.eventName === "application_submitted").length + 17,
+    applicantCount: applicantRows.length + 17,
   };
 }
