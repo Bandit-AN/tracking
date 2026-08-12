@@ -139,7 +139,7 @@ export async function importGoogleSheet(sheetUrl: string) {
     fetchSheet(spreadsheetId, "System Overview"),
     fetchSheet(spreadsheetId, "Closed Deals"),
     fetchSheet(spreadsheetId, "Sales CRM"),
-    fetchSheet(spreadsheetId, "Applicants"),
+    fetchSheet(spreadsheetId, "Applications"),
     fetchSheet(spreadsheetId, "Events"),
   ]);
 
@@ -185,25 +185,67 @@ export async function importGoogleSheet(sheetUrl: string) {
     return index >= 0 ? row[index]?.trim() || "" : "";
   };
 
-  const deals: ImportedDeal[] = dealRows.map((row) => ({
-    sourceKey: sourceKey(row.slice(0, 12)),
-    leadName: row[0]?.trim() || "Unnamed lead",
-    phone: row[1]?.trim() || "",
-    email: row[2]?.trim().toLowerCase() || "",
-    setter: row[3]?.trim() || "",
-    closer: row[4]?.trim() || "",
-    paymentMethod: row[5]?.trim() || "",
-    attributionSource: optionalDealValue(row, "source", "attribution source", "utm source"),
-    attributionMedium: optionalDealValue(row, "medium", "attribution medium", "utm medium"),
-    attributionCampaign: optionalDealValue(row, "campaign", "attribution campaign", "utm campaign"),
-    attributionVideo: optionalDealValue(row, "video", "video id", "youtube video", "utm content"),
-    cashCollected: numeric(row[6]),
-    offerAmount: numeric(row[7]),
-    amountOwed: numeric(row[8]),
-    closedAt: isoDate(row[9]),
-    nextPaymentAt: isoDate(row[10]),
-    contractEndAt: isoDate(row[11]),
-  }));
+  type ApplicationAttribution = {
+    source: string;
+    medium: string;
+    campaign: string;
+    video: string;
+  };
+  const applicationDataRows = applicantRows[0]?.[0]?.trim().toLowerCase() === "status"
+    ? applicantRows.slice(1)
+    : applicantRows;
+  const applicationAttribution = (row: string[]): ApplicationAttribution => ({
+    source: row[12]?.trim() || "",
+    medium: row[13]?.trim() || "",
+    campaign: row[14]?.trim() || "",
+    video: "",
+  });
+  const uniqueApplicationIndex = (keyFor: (row: string[]) => string) => {
+    const index = new Map<string, ApplicationAttribution | null>();
+    for (const row of applicationDataRows) {
+      const key = keyFor(row);
+      if (!key) continue;
+      index.set(key, index.has(key) ? null : applicationAttribution(row));
+    }
+    return index;
+  };
+  const applicationsByEmail = uniqueApplicationIndex((row) => {
+    const email = row[2]?.trim().toLowerCase() || "";
+    return email.includes("@") ? email : "";
+  });
+  const applicationsByPhone = uniqueApplicationIndex((row) => {
+    const phone = row[3]?.replace(/\D/g, "") || "";
+    return phone.length >= 7 ? phone : "";
+  });
+
+  const deals: ImportedDeal[] = dealRows.map((row) => {
+    const email = row[2]?.trim().toLowerCase() || "";
+    const phone = row[1]?.replace(/\D/g, "") || "";
+    const manualSource = optionalDealValue(row, "source", "attribution source", "utm source");
+    const matchedApplication = manualSource ? null :
+      (email.includes("@") ? applicationsByEmail.get(email) : null) ||
+      (phone.length >= 7 ? applicationsByPhone.get(phone) : null) ||
+      null;
+    return {
+      sourceKey: sourceKey(row.slice(0, 12)),
+      leadName: row[0]?.trim() || "Unnamed lead",
+      phone: row[1]?.trim() || "",
+      email,
+      setter: row[3]?.trim() || "",
+      closer: row[4]?.trim() || "",
+      paymentMethod: row[5]?.trim() || "",
+      attributionSource: manualSource || matchedApplication?.source || "",
+      attributionMedium: optionalDealValue(row, "medium", "attribution medium", "utm medium") || matchedApplication?.medium || "",
+      attributionCampaign: optionalDealValue(row, "campaign", "attribution campaign", "utm campaign") || matchedApplication?.campaign || "",
+      attributionVideo: optionalDealValue(row, "video", "video id", "youtube video", "utm content") || matchedApplication?.video || "",
+      cashCollected: numeric(row[6]),
+      offerAmount: numeric(row[7]),
+      amountOwed: numeric(row[8]),
+      closedAt: isoDate(row[9]),
+      nextPaymentAt: isoDate(row[10]),
+      contractEndAt: isoDate(row[11]),
+    };
+  });
 
   const meetings: ImportedMeeting[] = crm.flatMap((row) => {
     const scheduledAt = isoDate(row[6]);
