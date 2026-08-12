@@ -1,7 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
-  applicantEvents,
   deals,
   meetings,
   syncRuns,
@@ -142,38 +141,18 @@ export async function POST(
         });
     }
 
-    if (imported.applicants.length) {
-      await db
-        .insert(applicantEvents)
-        .values(
-          imported.applicants.map((applicant) => ({
-            ...applicant,
-            workspaceId,
-            syncedAt,
-          })),
-        )
-        .onConflictDoUpdate({
-          target: [applicantEvents.workspaceId, applicantEvents.sourceKey],
-          set: {
-            occurredAt: sql`excluded."occurred_at"`,
-            eventName: sql`excluded."event_name"`,
-            syncedAt,
-          },
-        });
-    }
-
     const recordsImported =
       imported.people.length +
       imported.deals.length +
       imported.meetings.length +
-      imported.applicants.length;
+      Math.max(0, imported.applicantCount - 17);
     await db
       .update(syncRuns)
       .set({ status: "succeeded", recordsImported, finishedAt: new Date() })
       .where(eq(syncRuns.id, run.id));
     await db
       .update(workspaces)
-      .set({ updatedAt: new Date() })
+      .set({ applicantCount: imported.applicantCount, updatedAt: new Date() })
       .where(eq(workspaces.id, workspaceId));
 
     return Response.json({ ok: true, recordsImported });

@@ -43,7 +43,6 @@ type Deal = {
   end: string | null;
 };
 type Meeting = { id: string; date: string; status: string; taken: boolean };
-type Applicant = { id: string; date: string };
 type Payout = {
   id: number;
   workspaceId: number;
@@ -57,7 +56,7 @@ type DashboardData = {
   performance: Person[];
   deals: Deal[];
   meetings: Meeting[];
-  applicants: Applicant[];
+  applicantCount: number;
   payouts: Payout[];
   lastSync: {
     status: string;
@@ -272,9 +271,6 @@ export function Dashboard({
     };
     const deals = (data?.deals ?? []).filter((deal) => inRange(deal.date));
     const meetings = (data?.meetings ?? []).filter((meeting) => inRange(meeting.date));
-    const applicants = (data?.applicants ?? []).filter((applicant) =>
-      inRange(applicant.date),
-    );
     const payouts = (data?.payouts ?? []).filter((payout) => inRange(payout.date));
     const bucketCount = 6;
     const totalDays = Math.max(
@@ -326,7 +322,6 @@ export function Dashboard({
     return {
       deals,
       meetings,
-      applicants,
       payouts,
       series,
       labels,
@@ -540,8 +535,6 @@ export function Dashboard({
             <div><label>Date range</label><select value={range} onChange={(event) => setRange(event.target.value)}><option>Today</option><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>
             {range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(event) => setCustomStart(event.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(event) => setCustomEnd(event.target.value)} /></div></>}
           </div>
-          {data?.lastSync && <div className="database-status-row"><span className={`sheet-pill ${data.lastSync.status === "succeeded" ? "connected" : "error"}`}>● {data.lastSync.status === "succeeded" ? "Database current" : "Sync needs attention"}</span></div>}
-
           {loading && <div className="state-card" role="status">Loading live portal data…</div>}
           {error && <div className="state-card error-state"><b>Dashboard unavailable</b><p>{error}</p><button onClick={() => void loadDashboard()}>Try again</button></div>}
           {!loading && !error && !workspaces.length && currentUser.role !== "admin" && <div className="state-card"><b>No subaccount access</b><p>A MoonRift Media administrator must assign this account to a client subaccount.</p></div>}
@@ -549,18 +542,20 @@ export function Dashboard({
           {!loading && !error && data && tab === "Overview" && (
             <>
               <section className="kpi-grid">
-                <article className="kpi"><span>Cash collected</span><strong>{money(period.cash)}</strong><small>Selected period</small></article>
-                <article className="kpi"><span>Revenue contracted</span><strong>{money(period.revenue)}</strong><small>{period.deals.length} closed deals</small></article>
-                <article className="kpi"><span>Applicants</span><strong>{period.applicants.length}</strong><small>Submitted applications</small></article>
-                <article className="kpi"><span>Closed deals</span><strong>{period.deals.length}</strong><small>Selected period</small></article>
-                <article className="kpi"><span>Meetings taken</span><strong>{period.taken}</strong><small>{period.meetings.length} booked calls</small></article>
-                <article className="kpi"><span>Show rate</span><strong>{period.meetings.length ? Math.round((period.taken / period.meetings.length) * 100) : 0}%</strong><small>Taken ÷ booked</small></article>
-                <article className="kpi"><span>Close rate</span><strong>{period.taken ? Math.round((period.deals.length / period.taken) * 100) : 0}%</strong><small>Closed ÷ meetings taken</small></article>
-                <article className="kpi"><span>Cash to revenue</span><strong>{period.revenue ? Math.round((period.cash / period.revenue) * 100) : 0}%</strong><small>Collected ÷ contracted</small></article>
+                <article className="kpi"><span>Cash collected</span><strong>{money(period.cash)}</strong></article>
+                <article className="kpi"><span>Revenue contracted</span><strong>{money(period.revenue)}</strong></article>
+                <article className="kpi"><span>Applicants</span><strong>{data.applicantCount}</strong></article>
+                <article className="kpi"><span>Closed deals</span><strong>{period.deals.length}</strong></article>
+                <article className="kpi"><span>Meetings taken</span><strong>{period.taken}</strong></article>
+                <article className="kpi"><span>Show rate</span><strong>{period.meetings.length ? Math.round((period.taken / period.meetings.length) * 100) : 0}%</strong></article>
+                <article className="kpi"><span>Close rate</span><strong>{period.taken ? Math.round((period.deals.length / period.taken) * 100) : 0}%</strong></article>
+                <article className="kpi"><span>Cash to revenue</span><strong>{period.revenue ? Math.round((period.cash / period.revenue) * 100) : 0}%</strong></article>
               </section>
               <Chart data={period.series} labels={period.labels} />
-              <ConversionFunnel applicants={period.applicants.length} booked={period.meetings.length} taken={period.taken} closed={period.deals.length} />
-              {data.permissions.canViewTeam && <div className="leaderboard-grid"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
+              <div className="performance-layout">
+                <ConversionFunnel applicants={data.applicantCount} booked={period.meetings.length} taken={period.taken} closed={period.deals.length} />
+                {data.permissions.canViewTeam && <div className="leaderboard-stack"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
+              </div>
             </>
           )}
 
@@ -568,7 +563,7 @@ export function Dashboard({
             <article className="table-card deals-card"><div className="section-head"><div><h2>Closed deals</h2><p>Normalized live records from Neon</p></div><strong>{period.deals.length} deals</strong></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Setter</th><th>Closer</th><th>Paid through</th><th>Cash</th><th>Offer</th><th>Owed</th><th>Closed</th><th>Next payment</th></tr></thead><tbody>{period.deals.map((deal) => <tr key={deal.id}><td><div><b>{deal.lead}</b><small>{deal.email || deal.phone}</small></div></td><td>{deal.setter || "—"}</td><td>{deal.closer || "—"}</td><td>{deal.method || "—"}</td><td>{money(deal.cash)}</td><td>{money(deal.offer)}</td><td>{money(deal.owed)}</td><td>{deal.date || "—"}</td><td>{deal.next || "—"}</td></tr>)}{!period.deals.length && <tr><td colSpan={9}>No closed deals in this date range.</td></tr>}</tbody></table></div></article>
           )}
 
-          {!loading && !error && data && tab === "Team" && <div className="leaderboard-grid"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
+          {!loading && !error && data && tab === "Team" && <div className="leaderboard-stack team-leaderboards"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
 
           {!loading && !error && data && tab === "Payouts" && (
             <><div className="payout-head"><div><h2>Team payouts</h2><p>Persistent payout history with administrator attribution.</p></div>{data.permissions.canManage && <button onClick={() => setModal("payout")}>＋ Add payout</button>}</div><article className="table-card"><div className="table-wrap"><table><thead><tr><th>Payee</th><th>Date</th><th>Method</th><th>Amount</th></tr></thead><tbody>{period.payouts.map((payout) => <tr key={payout.id}><td><b>{payout.member}</b></td><td>{payout.date}</td><td>{payout.method}</td><td>{money(payout.amount)}</td></tr>)}{!period.payouts.length && <tr><td colSpan={4}>No payouts in this date range.</td></tr>}</tbody></table></div></article></>
@@ -603,7 +598,7 @@ function ConversionFunnel({ applicants, booked, taken, closed }: { applicants: n
     { label: "Meetings taken", value: taken, width: "64%" },
     { label: "Closed", value: closed, width: "46%" },
   ];
-  return <article className="funnel-card" aria-label="Offer conversion funnel"><div className="section-head"><div><h2>Offer funnel</h2><p>Live conversion volume for the selected date range</p></div></div><div className="funnel-visual">{stages.map((stage, index) => <div className={`funnel-stage stage-${index + 1}`} style={{ width: stage.width }} key={stage.label}><span>{stage.label}</span><strong>{stage.value}</strong></div>)}</div></article>;
+  return <article className="funnel-card" aria-label="Offer conversion funnel"><div className="section-head"><div><h2>Offer funnel</h2><p>Current applicants and selected-period conversions</p></div></div><div className="funnel-visual">{stages.map((stage, index) => <div className={`funnel-stage stage-${index + 1}`} style={{ width: stage.width }} key={stage.label}><span>{stage.label}</span><strong>{stage.value}</strong></div>)}</div></article>;
 }
 
 function Modal({ title, onClose, onSubmit, children }: { title: string; onClose: () => void; onSubmit: (formData: FormData) => Promise<void>; children: React.ReactNode }) {

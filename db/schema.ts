@@ -59,6 +59,9 @@ export const workspaces = pgTable("workspaces", {
   initials: text("initials").notNull().default(""),
   color: text("color").notNull().default("#7646ff"),
   sheetUrl: text("sheet_url").notNull().default(""),
+  applicantCount: bigint("applicant_count", { mode: "number" })
+    .notNull()
+    .default(17),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

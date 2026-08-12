@@ -43,6 +43,13 @@
       "when": 1786518000000,
       "tag": "0005_applicant_events",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786522200000,
+      "tag": "0006_workspace_applicant_count",
+      "breakpoints": true
     }
   ]
 }

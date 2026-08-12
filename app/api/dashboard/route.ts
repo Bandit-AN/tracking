@@ -1,7 +1,6 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
-  applicantEvents,
   deals,
   meetings,
   payouts,
@@ -36,7 +35,7 @@ export async function GET(request: Request) {
     performanceRows,
     dealRows,
     meetingRows,
-    applicantRows,
+    applicantCountRows,
     payoutRows,
     syncRows,
   ] =
@@ -143,19 +142,18 @@ export async function GET(request: Request) {
         )
         .orderBy(desc(meetings.scheduledAt)),
       isStudent
-        ? Promise.resolve([])
-        : db
-            .select({
-              id: applicantEvents.id,
-              date: applicantEvents.occurredAt,
-            })
-            .from(applicantEvents)
-            .where(
-              isAgency
-                ? undefined
-                : eq(applicantEvents.workspaceId, workspaceId),
-            )
-            .orderBy(desc(applicantEvents.occurredAt)),
+        ? Promise.resolve([{ value: 0 }])
+        : isAgency
+          ? db
+              .select({
+                value: sql<number>`coalesce(sum(${workspaces.applicantCount}), 0)`,
+              })
+              .from(workspaces)
+          : db
+              .select({ value: workspaces.applicantCount })
+              .from(workspaces)
+              .where(eq(workspaces.id, workspaceId))
+              .limit(1),
       isStudent
         ? Promise.resolve([])
         : db
@@ -194,7 +192,7 @@ export async function GET(request: Request) {
     performance: performanceRows,
     deals: dealRows,
     meetings: meetingRows,
-    applicants: applicantRows,
+    applicantCount: Number(applicantCountRows[0]?.value ?? 0),
     payouts: payoutRows,
     lastSync: syncRows[0] ?? null,
     permissions: {
