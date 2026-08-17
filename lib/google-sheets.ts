@@ -110,6 +110,8 @@ function numeric(value = "") {
 function isoDate(value = "") {
   const trimmed = value.trim();
   if (!trimmed) return null;
+  const isoTimestamp = trimmed.match(/^(\d{4}-\d{2}-\d{2})(?:T|\s)/);
+  if (isoTimestamp) return isoTimestamp[1];
   const slashDate = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
   if (slashDate) {
     const year = Number(slashDate[3]);
@@ -215,16 +217,36 @@ export async function importGoogleSheet(sheetUrl: string) {
     source: string;
     medium: string;
     campaign: string;
+    content: string;
     video: string;
+    landingPage: string;
   };
-  const applicationDataRows = applicantRows[0]?.[0]?.trim().toLowerCase() === "status"
+  const normalizedApplicationHeaders = (applicantRows[0] ?? []).map((header) =>
+    header.trim().toLowerCase().replace(/[\s-]+/g, "_"),
+  );
+  const hasApplicationHeader = normalizedApplicationHeaders.some((header) =>
+    ["session_id", "full_name", "email", "phone", "status", "raw_payload"].includes(header),
+  );
+  const applicationHeaders = hasApplicationHeader
+    ? normalizedApplicationHeaders
+    : [];
+  const applicationDataRows = (hasApplicationHeader
     ? applicantRows.slice(1)
-    : applicantRows;
+    : applicantRows
+  ).filter((row) => row.some((value) => value.trim()));
+  const applicationColumn = (...names: string[]) =>
+    applicationHeaders.findIndex((header) => names.includes(header));
+  const applicationValue = (row: string[], fallback: number, ...names: string[]) => {
+    const index = applicationColumn(...names);
+    return row[index >= 0 ? index : fallback]?.trim() || "";
+  };
   const applicationAttribution = (row: string[]): ApplicationAttribution => ({
-    source: row[12]?.trim() || "",
-    medium: row[13]?.trim() || "",
-    campaign: row[14]?.trim() || "",
-    video: "",
+    source: applicationValue(row, 12, "utm_source", "source"),
+    medium: applicationValue(row, 13, "utm_medium", "medium"),
+    campaign: applicationValue(row, 14, "utm_campaign", "campaign"),
+    content: applicationValue(row, 15, "utm_content", "content"),
+    video: applicationValue(row, 17, "video_id", "video"),
+    landingPage: applicationValue(row, 21, "landing_page"),
   });
   const uniqueApplicationIndex = (keyFor: (row: string[]) => string) => {
     const index = new Map<string, ApplicationAttribution | null>();
@@ -236,11 +258,11 @@ export async function importGoogleSheet(sheetUrl: string) {
     return index;
   };
   const applicationsByEmail = uniqueApplicationIndex((row) => {
-    const email = row[2]?.trim().toLowerCase() || "";
+    const email = applicationValue(row, 2, "email").toLowerCase();
     return email.includes("@") ? email : "";
   });
   const applicationsByPhone = uniqueApplicationIndex((row) => {
-    const phone = row[3]?.replace(/\D/g, "") || "";
+    const phone = applicationValue(row, 3, "phone").replace(/\D/g, "");
     return phone.length >= 7 ? phone : "";
   });
 
@@ -343,14 +365,75 @@ export async function importGoogleSheet(sheetUrl: string) {
       }];
     },
   );
-  const submissionLimit = applicantRows.length;
-  const datedSubmissions = parsedAttributionEvents
+  const eventSubmissionDates = parsedAttributionEvents
     .filter((event) => event.eventName === "application_submitted")
-    .slice(-submissionLimit);
+    .map((event) => event.occurredAt);
+  let fallbackSubmissionIndex = Math.max(
+    0,
+    eventSubmissionDates.length - applicationDataRows.length,
+  );
+  const applicationEvents: ImportedAttributionEvent[] = applicationDataRows.flatMap(
+    (row) => {
+      const rawPayload = applicationValue(row, 24, "raw_payload");
+      let rawTimestamp = "";
+      if (rawPayload) {
+        try {
+          const parsed = JSON.parse(rawPayload) as {
+            timestamp?: unknown;
+            created_at?: unknown;
+          };
+          rawTimestamp = String(parsed.timestamp ?? parsed.created_at ?? "");
+        } catch {
+          rawTimestamp = "";
+        }
+      }
+      const directTimestamp = applicationValue(
+        row,
+        -1,
+        "timestamp",
+        "created_at",
+        "submitted_at",
+        "submission_date",
+      );
+      const occurredAt =
+        isoDate(directTimestamp) ||
+        isoDate(rawTimestamp) ||
+        eventSubmissionDates[fallbackSubmissionIndex++] ||
+        null;
+      if (!occurredAt) return [];
+      const attribution = applicationAttribution(row);
+      const applicationId = applicationValue(row, 0, "session_id", "id");
+      return [{
+        sourceKey: `application:${applicationId || sourceKey(row)}`,
+        occurredAt,
+        eventName: "application_submitted" as const,
+        source: attribution.source.toLowerCase(),
+        medium: attribution.medium.toLowerCase(),
+        campaign: attribution.campaign,
+        content: attribution.content,
+        videoId: attribution.video,
+        landingPage: attribution.landingPage,
+      }];
+    },
+  );
   const attributionEvents = [
     ...parsedAttributionEvents.filter((event) => event.eventName === "page_view"),
-    ...datedSubmissions,
+    ...applicationEvents,
   ];
+  const attributionKeyCounts = new Map<string, number>();
+  const uniqueAttributionEvents = attributionEvents.map((event) => {
+    const duplicateIndex = attributionKeyCounts.get(event.sourceKey) ?? 0;
+    attributionKeyCounts.set(event.sourceKey, duplicateIndex + 1);
+    if (duplicateIndex === 0) return event;
+
+    // Sheets can legitimately contain repeated rows/session IDs. PostgreSQL
+    // cannot update the same conflict target twice in one INSERT, so preserve
+    // each row with a deterministic per-import suffix.
+    return {
+      ...event,
+      sourceKey: `${event.sourceKey}:duplicate:${duplicateIndex}`,
+    };
+  });
 
   return {
     people: [
@@ -361,7 +444,7 @@ export async function importGoogleSheet(sheetUrl: string) {
     deals,
     meetings,
     payouts,
-    attributionEvents,
-    applicantCount: applicantRows.length + 17,
+    attributionEvents: uniqueAttributionEvents,
+    applicantCount: applicationDataRows.length + 17,
   };
 }

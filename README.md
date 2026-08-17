@@ -83,6 +83,45 @@ They upsert normalized live records into Neon and do not automatically delete
 database rows that disappear from a later sheet export. No sample or seed data
 runs in production.
 
+## Calendly booking synchronization
+
+All bookings for the configured Calendly event type can enter the Sales CRM,
+including meetings scheduled manually by a team member. Calendly sends
+`invitee.created` events to:
+
+```text
+https://app.moonriftmedia.com/api/integrations/calendly?secret=YOUR_RANDOM_SECRET
+```
+
+The route validates its secret, retrieves the invitee and scheduled event from
+Calendly with a server-only token, filters by the exact
+`CALENDLY_EVENT_TYPE_URI`, then forwards the normalized booking to the Google
+Apps Script web app. The Apps Script upserts both `Booked Calls` and `Sales CRM`
+by Calendly invitee URI, so webhook retries and the legacy browser callback do
+not create duplicate alerts.
+
+The funnel Calendly URL must include:
+
+```text
+utm_source=seller_syndicate_funnel&utm_campaign=self_booked_lead
+```
+
+Those bookings are labeled **Self booked lead**. A booking for the same event
+without that marker is labeled **Team booked lead**.
+
+Production requires these server-only Vercel variables:
+
+- `CALENDLY_ACCESS_TOKEN`
+- `CALENDLY_EVENT_TYPE_URI`
+- `CALENDLY_WEBHOOK_SECRET` (a long random value used in the subscription URL)
+- `GOOGLE_SHEETS_BOOKING_WEBHOOK_URL`
+
+Create an organization-scoped Calendly webhook subscription for
+`invitee.created` if every team member's bookings should be captured. Calendly
+requires an owner/admin token and an eligible paid Calendly plan for this
+organization-wide webhook. Never expose the token or webhook secret to browser
+code.
+
 ## Validation
 
 ```bash

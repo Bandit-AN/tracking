@@ -29,6 +29,7 @@ type Person = {
 };
 type Deal = {
   id: string;
+  workspaceId: number;
   lead: string;
   phone: string;
   email: string;
@@ -48,6 +49,7 @@ type Deal = {
 };
 type Meeting = {
   id: string;
+  workspaceId: number;
   lead: string;
   phone: string;
   email: string;
@@ -62,6 +64,7 @@ type Meeting = {
 };
 type AttributionEvent = {
   id: string;
+  workspaceId: number;
   date: string;
   event: "page_view" | "application_submitted";
   source: string;
@@ -120,6 +123,16 @@ const initials = (name: string) =>
     .slice(0, 2)
     .toUpperCase();
 
+const SELLER_SYNDICATE_LOGO = "/seller-syndicate-logo.png";
+const workspaceAvatar = (workspace?: Pick<Workspace, "name" | "avatar">) =>
+  workspace && /seller\s+syndicate/i.test(workspace.name)
+    ? SELLER_SYNDICATE_LOGO
+    : workspace?.avatar || "";
+
+const isClosedOutcome = (status: string) =>
+  /\b(closed|won|sold|paid|deposit)\b/i.test(status) &&
+  !/not\s+closed|lost|refund|cancel/i.test(status);
+
 function rangeStart(range: string, now: Date) {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -132,7 +145,19 @@ function rangeStart(range: string, now: Date) {
   return start;
 }
 
-function Chart({ data, labels }: { data: number[]; labels: string[] }) {
+function Chart({
+  data,
+  labels,
+  title,
+  color,
+  fill,
+}: {
+  data: number[];
+  labels: string[];
+  title: "Cash collected" | "Revenue";
+  color: string;
+  fill: string;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<number | null>(null);
   useEffect(() => {
@@ -153,8 +178,8 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
         y: height - 15 - (value / max) * (height - 30),
       }));
       const gradient = context.createLinearGradient(0, 0, 0, height);
-      gradient.addColorStop(0, "rgba(139,108,255,.36)");
-      gradient.addColorStop(1, "rgba(139,108,255,0)");
+      gradient.addColorStop(0, fill);
+      gradient.addColorStop(1, "rgba(0,0,0,0)");
       context.beginPath();
       context.moveTo(points[0].x, height);
       points.forEach((point) => context.lineTo(point.x, point.y));
@@ -168,7 +193,7 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
           ? context.lineTo(point.x, point.y)
           : context.moveTo(point.x, point.y),
       );
-      context.strokeStyle = "#8b6cff";
+      context.strokeStyle = color;
       context.lineWidth = 2.5;
       context.stroke();
       points.forEach((point, index) => {
@@ -178,7 +203,7 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
         context.fillStyle = "#f8f5ff";
         context.fill();
         context.lineWidth = 3;
-        context.strokeStyle = "#8b6cff";
+        context.strokeStyle = color;
         context.stroke();
       });
     };
@@ -186,19 +211,27 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
     const observer = new ResizeObserver(render);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [data, hovered]);
+  }, [color, data, fill, hovered]);
+  const hoveredValue = hovered === null ? null : data[hovered];
+  const max = Math.max(...data, 1) * 1.12;
+  const horizontalPosition = hovered === null
+    ? 0
+    : 2 + (hovered / Math.max(data.length - 1, 1)) * 96;
+  const verticalPosition = hoveredValue === null
+    ? 50
+    : 90 - (hoveredValue / max) * 78;
   return (
     <article className="chart-card">
       <div className="chart-head">
         <div>
-          <span className="chart-dot" /> Cash collected
+          <span className="chart-dot" style={{ background: color }} /> {title}
         </div>
         <strong>{money(data.reduce((sum, value) => sum + value, 0))}</strong>
       </div>
       <div className="chart-canvas-wrap">
         <canvas
           ref={canvas}
-          aria-label="Cash collected over time"
+          aria-label={`${title} over time`}
           onMouseMove={(event) => {
             const bounds = event.currentTarget.getBoundingClientRect();
             const count = Math.max(data.length - 1, 1);
@@ -207,9 +240,12 @@ function Chart({ data, labels }: { data: number[]; labels: string[] }) {
           }}
           onMouseLeave={() => setHovered(null)}
         />
-        {hovered !== null && data[hovered] !== undefined && (
-          <div className="chart-tooltip" style={{ left: `${8 + (hovered / Math.max(data.length - 1, 1)) * 84}%` }}>
-            <span>{labels[hovered]}</span><strong>{money(data[hovered])}</strong>
+        {hovered !== null && hoveredValue != null && (
+          <div
+            className={`chart-tooltip${horizontalPosition > 68 ? " chart-tooltip-left" : ""}`}
+            style={{ left: `${horizontalPosition}%`, top: `${verticalPosition}%` }}
+          >
+            <span>{labels[hovered]}</span><strong>{money(hoveredValue)}</strong>
           </div>
         )}
       </div>
@@ -338,7 +374,8 @@ export function Dashboard({
     );
     const bucketCount = Math.min(totalDays, 120);
     const bucketDays = Math.max(1, Math.ceil(totalDays / bucketCount));
-    const series = Array(bucketCount).fill(0) as number[];
+    const cashSeries = Array(bucketCount).fill(0) as number[];
+    const revenueSeries = Array(bucketCount).fill(0) as number[];
     const labels = Array.from({ length: bucketCount }, (_, index) => {
       const date = new Date(chartStart);
       date.setDate(date.getDate() + index * bucketDays);
@@ -350,7 +387,8 @@ export function Dashboard({
         bucketCount - 1,
         Math.max(0, Math.floor((date.getTime() - chartStart.getTime()) / 86_400_000 / bucketDays)),
       );
-      series[index] += deal.cash;
+      cashSeries[index] += deal.cash;
+      revenueSeries[index] += deal.offer;
     });
     const rankByCash = (role: "closer" | "setter") => {
       const people = new Map<string, Person>();
@@ -379,6 +417,9 @@ export function Dashboard({
       );
     };
     const taken = meetings.filter((meeting) => meeting.taken).length;
+    const crmCloses = meetings.filter((meeting) =>
+      isClosedOutcome(meeting.status),
+    ).length;
     const applications = attributionEvents.filter((event) => event.event === "application_submitted");
     const sourceAttribution = new Map<string, { source: string; deals: number; cash: number; revenue: number }>();
     for (const deal of deals) {
@@ -415,16 +456,56 @@ export function Dashboard({
       item.cash += deal.cash;
       youtube.set(key, item);
     }
+    const workspacePerformance = data?.workspace.id === 0
+      ? workspaces.map((workspace) => {
+          const workspaceDeals = deals.filter(
+            (deal) => deal.workspaceId === workspace.id,
+          );
+          const workspaceMeetings = meetings.filter(
+            (meeting) => meeting.workspaceId === workspace.id,
+          );
+          const workspaceApplications = applications.filter(
+            (event) => event.workspaceId === workspace.id,
+          ).length + 17;
+          const workspaceTaken = workspaceMeetings.filter(
+            (meeting) => meeting.taken,
+          ).length;
+          const workspaceCloses = workspaceMeetings.filter((meeting) =>
+            isClosedOutcome(meeting.status),
+          ).length;
+          const cash = workspaceDeals.reduce((sum, deal) => sum + deal.cash, 0);
+          const revenue = workspaceDeals.reduce((sum, deal) => sum + deal.offer, 0);
+          return {
+            ...workspace,
+            applications: workspaceApplications,
+            meetings: workspaceMeetings.length,
+            taken: workspaceTaken,
+            closes: workspaceCloses,
+            cash,
+            revenue,
+            showRate: workspaceMeetings.length
+              ? Math.round((workspaceTaken / workspaceMeetings.length) * 100)
+              : 0,
+            closeRate: workspaceTaken
+              ? Math.round((workspaceCloses / workspaceTaken) * 100)
+              : 0,
+            cashToRevenue: revenue ? Math.round((cash / revenue) * 100) : 0,
+          };
+        }).sort((left, right) => right.cash - left.cash)
+      : [];
     return {
       deals,
       meetings,
       payouts,
-      series,
+      cashSeries,
+      revenueSeries,
       labels,
       cash: deals.reduce((sum, deal) => sum + deal.cash, 0),
       revenue: deals.reduce((sum, deal) => sum + deal.offer, 0),
       taken,
+      crmCloses,
       applicants: applications.length + (data?.applicantBaseline ?? 0),
+      workspacePerformance,
       sourceAttribution: [...sourceAttribution.values()].sort((left, right) => right.deals - left.deals),
       youtube: [...youtube.values()].sort((left, right) => {
         const leftRate = left.views ? left.applicants / left.views : 0;
@@ -434,7 +515,7 @@ export function Dashboard({
       closers: rankByCash("closer"),
       setters: rankByCash("setter"),
     };
-  }, [data, range, customStart, customEnd]);
+  }, [data, range, customStart, customEnd, workspaces]);
 
   async function submitJson(url: string, method: string, body: unknown) {
     const response = await fetch(url, {
@@ -525,6 +606,7 @@ export function Dashboard({
       role: String(formData.get("role")),
       status: String(formData.get("status")),
       workspaceIds: formData.getAll("workspaceIds").map(Number),
+      newPassword: String(formData.get("newPassword") || ""),
     });
     setModal(null);
     setSelectedUser(null);
@@ -578,6 +660,7 @@ export function Dashboard({
     ...(currentUser.role === "admin" ? ["Users", "Settings"] : []),
   ];
   const currentWorkspace = data?.workspace ?? workspaces.find((item) => item.id === workspaceId);
+  const currentWorkspaceLogo = workspaceAvatar(currentWorkspace);
   const pageHeading = workspaceId === 0 && tab === "Overview"
     ? "Agency Overview"
     : `${currentWorkspace?.name ?? "MoonRift Media"}${tab === "Overview" ? " Overview" : ` ${tab}`}`;
@@ -590,6 +673,24 @@ export function Dashboard({
           <span>MoonRift Media</span>
         </div>
         <div className="workspace-label">CLIENT SUBACCOUNT</div>
+        <div className="workspace-current">
+          {currentWorkspaceLogo === SELLER_SYNDICATE_LOGO ? (
+            <Image
+              src={SELLER_SYNDICATE_LOGO}
+              alt="Seller Syndicate"
+              width={38}
+              height={38}
+            />
+          ) : (
+            <span style={{ background: currentWorkspace?.color || "#7646ff" }}>
+              {workspaceId === 0 ? "MR" : initials(currentWorkspace?.name || "Client")}
+            </span>
+          )}
+          <div>
+            <b>{currentWorkspace?.name || "Agency overview"}</b>
+            <small>{currentWorkspace?.industry || "All client offers"}</small>
+          </div>
+        </div>
         <select
           className="workspace-select"
           value={workspaceId}
@@ -664,15 +765,29 @@ export function Dashboard({
                 <article className="kpi"><span>Cash collected</span><strong>{money(period.cash)}</strong></article>
                 <article className="kpi"><span>Revenue contracted</span><strong>{money(period.revenue)}</strong></article>
                 <article className="kpi"><span>Applicants</span><strong>{period.applicants}</strong></article>
-                <article className="kpi"><span>Closed deals</span><strong>{period.deals.length}</strong></article>
+                <article className="kpi"><span>Closed deals</span><strong>{period.crmCloses}</strong></article>
                 <article className="kpi"><span>Meetings taken</span><strong>{period.taken}</strong></article>
                 <article className="kpi"><span>Show rate</span><strong>{period.meetings.length ? Math.round((period.taken / period.meetings.length) * 100) : 0}%</strong></article>
-                <article className="kpi"><span>Close rate</span><strong>{period.taken ? Math.round((period.deals.length / period.taken) * 100) : 0}%</strong></article>
+                <article className="kpi"><span>Close rate</span><strong>{period.taken ? Math.round((period.crmCloses / period.taken) * 100) : 0}%</strong></article>
                 <article className="kpi"><span>Cash to revenue</span><strong>{period.revenue ? Math.round((period.cash / period.revenue) * 100) : 0}%</strong></article>
               </section>
-              <Chart data={period.series} labels={period.labels} />
+              <section className="media-kpis" aria-label="Media KPIs">
+                <div className="section-head"><div><h2>Media KPIs</h2><p>Applications from the Applications tab; meetings and closes from Sales CRM.</p></div></div>
+                <div>
+                  <article><span>Applications</span><strong>{period.applicants}</strong></article>
+                  <article><span>Meetings</span><strong>{period.meetings.length}</strong></article>
+                  <article><span>Closes</span><strong>{period.crmCloses}</strong></article>
+                </div>
+              </section>
+              <div className="charts">
+                <Chart data={period.cashSeries} labels={period.labels} title="Cash collected" color="#8b6cff" fill="rgba(139,108,255,.36)" />
+                <Chart data={period.revenueSeries} labels={period.labels} title="Revenue" color="#ffac00" fill="rgba(255,172,0,.28)" />
+              </div>
+              {workspaceId === 0 && (
+                <AgencyWorkspacePerformance rows={period.workspacePerformance} />
+              )}
               <div className="performance-layout">
-                <ConversionFunnel applicants={period.applicants} booked={period.meetings.length} taken={period.taken} closed={period.deals.length} />
+                <ConversionFunnel applicants={period.applicants} booked={period.meetings.length} taken={period.taken} closed={period.crmCloses} />
                 {data.permissions.canViewTeam && <div className="leaderboard-stack"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
               </div>
               <AttributionSection sources={period.sourceAttribution} youtube={period.youtube} totalDeals={period.deals.length} />
@@ -719,10 +834,51 @@ export function Dashboard({
         {modal === "workspace" && <><label>Client or offer name</label><input name="name" required minLength={2} /><label>Industry / offer type</label><input name="industry" defaultValue="Client offer" required /></>}
         {modal === "payout" && <><label>Payee</label><select name="member" required>{data?.performance.map((person) => <option key={person.id} value={`${person.role}:${person.name}`}>{person.name} — {person.role}</option>)}</select><label>Date</label><input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /><label>Method</label><select name="method"><option>ACH</option><option>Wire</option><option>Zelle</option><option>PayPal</option><option>Venmo</option><option>Other</option></select><label>Amount</label><input name="amount" type="number" min="0.01" step="0.01" required /></>}
         {modal === "account" && <><label>Full name</label><input name="name" required minLength={2} /><label>Email</label><input name="email" type="email" required /><label>Temporary password</label><input name="password" type="password" minLength={12} autoComplete="new-password" required /><small className="field-help">Use 12+ characters and share it through a secure channel. The password is hashed by Neon Auth and is never stored in portal tables.</small><label>Role</label><select name="role"><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} /> {workspace.name}</label>)}</fieldset></>}
-        {modal === "edit-account" && selectedUser && <><div className="access-note"><b>{selectedUser.name}</b><br />{selectedUser.email}</div><label>Role</label><select name="role" defaultValue={selectedUser.role}><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><label>Status</label><select name="status" defaultValue={selectedUser.status}><option value="active">Active</option><option value="disabled">Disabled</option></select><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} defaultChecked={selectedUser.workspaceIds.includes(workspace.id)} /> {workspace.name}</label>)}</fieldset></>}
+        {modal === "edit-account" && selectedUser && <><div className="access-note"><b>{selectedUser.name}</b><br />{selectedUser.email}</div><label>Role</label><select name="role" defaultValue={selectedUser.role}><option value="team_member">Team member</option><option value="student">Client</option><option value="admin">Agency admin</option></select><label>Status</label><select name="status" defaultValue={selectedUser.status}><option value="active">Active</option><option value="disabled">Disabled</option></select><label>New password (optional)</label><input name="newPassword" type="password" minLength={12} autoComplete="new-password" /><small className="field-help">Leave blank to keep the current password. Passwords are hashed by Neon Auth and never stored in portal records.</small><fieldset><legend>Client subaccount access</legend>{workspaces.map((workspace) => <label className="check-row" key={workspace.id}><input type="checkbox" name="workspaceIds" value={workspace.id} defaultChecked={selectedUser.workspaceIds.includes(workspace.id)} /> {workspace.name}</label>)}</fieldset></>}
       </Modal>}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </div>
+  );
+}
+
+function AgencyWorkspacePerformance({ rows }: {
+  rows: Array<Workspace & {
+    applications: number;
+    meetings: number;
+    taken: number;
+    closes: number;
+    cash: number;
+    revenue: number;
+    showRate: number;
+    closeRate: number;
+    cashToRevenue: number;
+  }>;
+}) {
+  return (
+    <section className="agency-workspaces" aria-label="Offer performance by workspace">
+      <div className="section-head">
+        <div>
+          <h2>Offer performance</h2>
+          <p>Every client workspace compared across the selected date range.</p>
+        </div>
+      </div>
+      <article className="table-card">
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Offer</th><th>Cash</th><th>Revenue</th><th>Applications</th><th>Meetings</th><th>Taken</th><th>Closes</th><th>Show rate</th><th>Close rate</th><th>Cash / revenue</th></tr></thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  <td><div className="workspace-table-name">{workspaceAvatar(row) === SELLER_SYNDICATE_LOGO ? <Image src={SELLER_SYNDICATE_LOGO} alt="" width={34} height={34} /> : <span style={{ background: row.color }}>{row.initials || initials(row.name)}</span>}<div><b>{row.name}</b><small>{row.industry}</small></div></div></td>
+                  <td><b>{money(row.cash)}</b></td><td>{money(row.revenue)}</td><td>{row.applications}</td><td>{row.meetings}</td><td>{row.taken}</td><td>{row.closes}</td><td>{row.showRate}%</td><td>{row.closeRate}%</td><td>{row.cashToRevenue}%</td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={10}>No client workspaces are available yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
   );
 }
 

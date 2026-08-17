@@ -25,6 +25,10 @@ type AuthAdminApi = {
     userId: string;
     role: "admin" | "user";
   }): Promise<AuthAdminResult<unknown>>;
+  setUserPassword(input: {
+    userId: string;
+    newPassword: string;
+  }): Promise<AuthAdminResult<unknown>>;
   banUser(input: { userId: string }): Promise<AuthAdminResult<unknown>>;
   unbanUser(input: { userId: string }): Promise<AuthAdminResult<unknown>>;
 };
@@ -47,6 +51,7 @@ const updateUserInput = z.object({
   role: z.enum(["admin", "team_member", "student"]),
   status: z.enum(["active", "disabled"]),
   workspaceIds: z.array(z.number().int().positive()).max(100).default([]),
+  newPassword: z.union([z.literal(""), z.string().min(12).max(128)]).optional(),
 });
 
 async function requireAdminRequest() {
@@ -195,6 +200,19 @@ export async function PATCH(request: Request) {
         { error: statusResult.error.message ?? "Identity status could not be updated" },
         { status: statusResult.error.status || 502 },
       );
+    }
+
+    if (parsed.data.newPassword) {
+      const passwordResult = await authAdmin.setUserPassword({
+        userId: existingUser.authUserId,
+        newPassword: parsed.data.newPassword,
+      });
+      if (passwordResult.error) {
+        return Response.json(
+          { error: passwordResult.error.message ?? "Password could not be updated" },
+          { status: passwordResult.error.status || 502 },
+        );
+      }
     }
   }
 

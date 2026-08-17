@@ -221,17 +221,33 @@ export async function POST(
 
     return Response.json({ ok: true, recordsImported });
   } catch (error) {
+    const queryErrorMessage =
+      error instanceof Error ? error.message.slice(0, 500) : "Unknown sync error";
+    const cause =
+      error && typeof error === "object" && "cause" in error
+        ? (error as { cause?: unknown }).cause
+        : undefined;
+    const errorMessage =
+      cause instanceof Error ? cause.message.slice(0, 500) : queryErrorMessage;
+    console.error("Workspace data synchronization failed", {
+      workspaceId,
+      message: errorMessage,
+    });
     await db
       .update(syncRuns)
       .set({
         status: "failed",
-        errorMessage:
-          error instanceof Error ? error.message.slice(0, 500) : "Unknown sync error",
+        errorMessage,
         finishedAt: new Date(),
       })
       .where(eq(syncRuns.id, run.id));
     return Response.json(
-      { error: "The data source could not be synchronized" },
+      {
+        error: "The data source could not be synchronized",
+        // This endpoint is admin-only. Returning a bounded message makes failed
+        // production integrations diagnosable without exposing credentials.
+        detail: errorMessage,
+      },
       { status: 502 },
     );
   }

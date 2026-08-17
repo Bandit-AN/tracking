@@ -99,6 +99,7 @@ export async function GET(request: Request) {
       db
         .select({
           id: deals.id,
+          workspaceId: deals.workspaceId,
           lead: deals.leadName,
           phone: deals.phone,
           email: deals.email,
@@ -131,6 +132,7 @@ export async function GET(request: Request) {
       db
         .select({
           id: meetings.id,
+          workspaceId: meetings.workspaceId,
           lead: meetings.leadName,
           phone: meetings.phone,
           email: meetings.email,
@@ -160,6 +162,7 @@ export async function GET(request: Request) {
         : db
             .select({
               id: applicantEvents.id,
+              workspaceId: applicantEvents.workspaceId,
               date: applicantEvents.occurredAt,
               event: applicantEvents.eventName,
               source: applicantEvents.source,

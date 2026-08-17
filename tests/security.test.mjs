@@ -29,12 +29,26 @@ test("secret environment variables are server-only", async () => {
   const files = await Promise.all(
     [
       "lib/auth/server.ts",
+      "lib/calendly.ts",
       "db/index.ts",
       "app/api/workspaces/route.ts",
     ].map((path) => readFile(new URL(path, root), "utf8")),
   );
   const source = files.join("\n");
   assert.doesNotMatch(source, /NEXT_PUBLIC_(DATABASE|POSTGRES|NEON_AUTH_COOKIE)/);
+  assert.doesNotMatch(source, /NEXT_PUBLIC_(CALENDLY|GOOGLE_SHEETS_BOOKING)/);
+});
+
+test("Calendly webhook authenticates, validates resources, and filters event type", async () => {
+  const [route, integration] = await Promise.all([
+    readFile(new URL("app/api/integrations/calendly/route.ts", root), "utf8"),
+    readFile(new URL("lib/calendly.ts", root), "utf8"),
+  ]);
+  assert.match(route, /CALENDLY_WEBHOOK_SECRET/);
+  assert.match(route, /timingSafeEqual/);
+  assert.match(integration, /CALENDLY_ACCESS_TOKEN/);
+  assert.match(integration, /scheduledEvent\.event_type !== expectedEventTypeUri/);
+  assert.match(integration, /bookingLabel = selfBooked \? "Self booked lead" : "Team booked lead"/);
 });
 
 test("agency-wide aggregation is restricted to portal administrators", async () => {
@@ -49,10 +63,11 @@ test("agency-wide aggregation is restricted to portal administrators", async () 
 });
 
 test("authenticated dashboard retains its responsive layout hooks", async () => {
-  const dashboard = await readFile(
-    new URL("app/dashboard.tsx", root),
-    "utf8",
-  );
+  const [dashboard, sheetImport, adminUsers] = await Promise.all([
+    readFile(new URL("app/dashboard.tsx", root), "utf8"),
+    readFile(new URL("lib/google-sheets.ts", root), "utf8"),
+    readFile(new URL("app/api/admin/users/route.ts", root), "utf8"),
+  ]);
   assert.match(dashboard, /className={`sidebar/);
   assert.match(dashboard, /<main className="content">/);
   assert.match(dashboard, /<header className="topbar">/);
@@ -69,4 +84,14 @@ test("authenticated dashboard retains its responsive layout hooks", async () => 
   assert.match(dashboard, /Top closers/);
   assert.match(dashboard, /Top setters/);
   assert.match(dashboard, /ConversionFunnel/);
+  assert.match(dashboard, /AgencyWorkspacePerformance/);
+  assert.match(dashboard, /title="Cash collected"/);
+  assert.match(dashboard, /title="Revenue"/);
+  assert.doesNotMatch(dashboard, /by payment date/i);
+  assert.match(dashboard, /Applications from the Applications tab/);
+  assert.match(dashboard, /isClosedOutcome\(meeting\.status\)/);
+  assert.match(sheetImport, /applicationEvents/);
+  assert.match(sheetImport, /fetchSheet\(spreadsheetId, "Applications"\)/);
+  assert.match(adminUsers, /setUserPassword/);
+  assert.doesNotMatch(`${dashboard}\n${adminUsers}`, /Pandaseeke123!/);
 });
