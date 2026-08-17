@@ -7,7 +7,7 @@ type Person = { name: string; role: "Closer" | "Setter" | "Operator"; calls: num
 type Deal = { lead: string; phone: string; email: string; setter: string; closer: string; method: string; cash: number; offer: number; owed: number; date: string; next: string; end: string };
 type Meeting = { date: string; taken: boolean };
 type Payout = { id: number; workspaceId: number; member: string; date: string; method: string; amount: number };
-type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; updatedAt: Date };
+type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; applicationDates: string[]; updatedAt: Date };
 
 const sheetUrlDefault = "https://docs.google.com/spreadsheets/d/1ahyY64u9uYmcEDFi1XAJRFmnZ_gX_6VQHUnWvswkvmg/edit?usp=sharing";
 const clientsSeed: Client[] = [
@@ -41,8 +41,19 @@ function parseCsv(text: string) {
 
 function parseSheetDate(value: string) {
   if (!value?.trim()) return null;
-  const date = new Date(`${value.trim()} 12:00:00`);
+  const raw = value.trim();
+  const usDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const isoDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = usDate
+    ? new Date(Number(usDate[3]), Number(usDate[1]) - 1, Number(usDate[2]), 12)
+    : isoDate
+      ? new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]), 12)
+      : new Date(raw);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function endOfDay(value = new Date()) {
+  const end = new Date(value); end.setHours(23, 59, 59, 999); return end;
 }
 
 function rangeStart(range: string, now: Date) {
@@ -98,16 +109,17 @@ export function Dashboard() {
   const [newName, setNewName] = useState(""); const [email, setEmail] = useState(""); const [workspaceName, setWorkspaceName] = useState(""); const [workspaceAvatar, setWorkspaceAvatar] = useState("");
   const [sheetUrls, setSheetUrls] = useState<Record<number, string>>({ 1: sheetUrlDefault }); const [sheetUrl, setSheetUrl] = useState(sheetUrlDefault);
   const [sheetData, setSheetData] = useState<SheetMetrics | null>(null); const [sheetStatus, setSheetStatus] = useState<"idle" | "loading" | "connected" | "error">("idle");
+  const [refreshing, setRefreshing] = useState(false);
   const [payouts, setPayouts] = useState<Payout[]>([]); const [payoutMember, setPayoutMember] = useState(""); const [payoutDate, setPayoutDate] = useState(new Date().toISOString().slice(0, 10)); const [payoutMethod, setPayoutMethod] = useState("ACH"); const [payoutAmount, setPayoutAmount] = useState("");
   const client = clients.find((c) => c.id === clientId) ?? clients[0];
 
-  async function loadSheet(url = sheetUrls[clientId]) {
+  async function loadSheet(url = sheetUrls[clientId], force = false) {
     if (!url) { setSheetData(null); setSheetStatus("idle"); return; }
     setSheetStatus("loading");
     try {
       const id = sheetIdFromUrl(url);
-      const getSheet = async (sheet: string) => { const response = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(id)}&sheet=${encodeURIComponent(sheet)}`); if (!response.ok) throw new Error(); return parseCsv(await response.text()); };
-      const [overview, closed, crm] = await Promise.all([getSheet("System Overview"), getSheet("Closed Deals"), getSheet("Sales CRM")]);
+      const getSheet = async (sheet: string) => { const response = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(id)}&sheet=${encodeURIComponent(sheet)}${force ? `&refresh=${Date.now()}` : ""}`, { cache: "no-store" }); if (!response.ok) throw new Error(); return parseCsv(await response.text()); };
+      const [overview, closed, crm, events] = await Promise.all([getSheet("System Overview"), getSheet("Closed Deals"), getSheet("Sales CRM"), getSheet("Events")]);
       const totalsHeader = overview.findIndex((row) => row.some((cell) => cell.includes("Meetings Booked"))); const totals = overview[totalsHeader + 1] ?? [];
       const section = (name: string, stop: string[]) => { const start = overview.findIndex((row) => row[0]?.trim() === name); if (start < 0) return []; const rows = overview.slice(start + 1); const end = rows.findIndex((row) => stop.includes(row[0]?.trim())); return (end < 0 ? rows : rows.slice(0, end)).filter((row) => row[0]?.trim()); };
       const toPeople = (rows: string[][], role: Person["role"]) => rows.map((row) => ({ name: row[0].trim(), role, calls: numeric(row[1]), closed: numeric(row[2]), revenue: numeric(row[4]), cash: numeric(row[5]), commission: numeric(row[6]), paid: numeric(row[7]) })).sort((a, b) => b.cash - a.cash);
@@ -120,6 +132,7 @@ export function Dashboard() {
         operators: operatorRows.map((row) => ({ name: row[0], role: "Operator" as const, calls: 0, closed: 0, revenue: 0, cash: 0, commission: numeric(row[2]), paid: numeric(row[3]) })),
         deals: dealRows.map((row) => ({ lead: row[0], phone: row[1], email: row[2], setter: row[3], closer: row[4], method: row[5], cash: numeric(row[6]), offer: numeric(row[7]), owed: numeric(row[8]), date: row[9], next: row[10], end: row[11] })),
         meetings: crm.filter((row) => parseSheetDate(row[6])).map((row) => ({ date: row[6], taken: !!row[3] && !/no show|rescheduled/i.test(row[3]) })),
+        applicationDates: events.filter((row) => row[1]?.trim() === "application_submitted" && parseSheetDate(row[0])).map((row) => row[0]),
         updatedAt: new Date(),
       });
       setSheetStatus("connected");
@@ -154,8 +167,15 @@ export function Dashboard() {
   useEffect(() => { void loadSheet(); void loadWorkspace(); }, [clientId]);
   const notify = (text: string) => { setToast(text); window.setTimeout(() => setToast(""), 2800); };
 
+  async function refreshDashboard() {
+    setRefreshing(true);
+    await Promise.all([loadSheet(sheetUrls[clientId], true), loadWorkspace()]);
+    setRefreshing(false);
+    notify("Latest Google Sheets data loaded");
+  }
+
   const period = useMemo(() => {
-    const now = range === "Custom" ? new Date(`${customEnd} 23:59:59`) : new Date(); const start = range === "Custom" ? new Date(`${customStart} 00:00:00`) : rangeStart(range, now);
+    const now = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay(); const start = range === "Custom" ? new Date(`${customStart}T00:00:00`) : rangeStart(range, now);
     const allTime = range === "All time"; const dateInPeriod = (date: Date) => allTime || (date >= start && date <= now);
     const dated = (sheetData?.deals ?? []).map((deal) => ({ deal, date: parseSheetDate(deal.date) })).filter((item): item is { deal: Deal; date: Date } => !!item.date && dateInPeriod(item.date));
     const spanStart = allTime && dated.length ? new Date(Math.min(...dated.map((x) => x.date.getTime()))) : start;
@@ -169,8 +189,10 @@ export function Dashboard() {
     const periodMs = now.getTime() - start.getTime() + 1; const previousStart = new Date(start.getTime() - periodMs); const previousEnd = new Date(start.getTime() - 1);
     const previousDeals = allTime ? [] : (sheetData?.deals ?? []).map((deal) => ({ deal, date: parseSheetDate(deal.date) })).filter((x): x is { deal: Deal; date: Date } => !!x.date && x.date >= previousStart && x.date <= previousEnd);
     const previousMeetings = allTime ? [] : (sheetData?.meetings ?? []).map((meeting) => ({ meeting, date: parseSheetDate(meeting.date) })).filter((x) => !!x.date && x.date >= previousStart && x.date <= previousEnd);
-    const current = { cash: dated.reduce((sum, x) => sum + x.deal.cash, 0), revenue: dated.reduce((sum, x) => sum + x.deal.offer, 0), closed: dated.length, booked, taken, show: booked ? taken / booked * 100 : 0 };
-    const previous = { cash: previousDeals.reduce((s, x) => s + x.deal.cash, 0), revenue: previousDeals.reduce((s, x) => s + x.deal.offer, 0), closed: previousDeals.length, booked: previousMeetings.length, taken: previousMeetings.filter((x) => x.meeting.taken).length, show: previousMeetings.length ? previousMeetings.filter((x) => x.meeting.taken).length / previousMeetings.length * 100 : 0 };
+    const applications = (sheetData?.applicationDates ?? []).map(parseSheetDate).filter((date): date is Date => !!date && dateInPeriod(date)).length;
+    const previousApplications = allTime ? 0 : (sheetData?.applicationDates ?? []).map(parseSheetDate).filter((date): date is Date => !!date && date >= previousStart && date <= previousEnd).length;
+    const current = { cash: dated.reduce((sum, x) => sum + x.deal.cash, 0), revenue: dated.reduce((sum, x) => sum + x.deal.offer, 0), closed: dated.length, booked, taken, show: booked ? taken / booked * 100 : 0, applications };
+    const previous = { cash: previousDeals.reduce((s, x) => s + x.deal.cash, 0), revenue: previousDeals.reduce((s, x) => s + x.deal.offer, 0), closed: previousDeals.length, booked: previousMeetings.length, taken: previousMeetings.filter((x) => x.meeting.taken).length, show: previousMeetings.length ? previousMeetings.filter((x) => x.meeting.taken).length / previousMeetings.length * 100 : 0, applications: previousApplications };
     return { dated, cashSeries, revenueSeries, labels: shownLabels, ...current, previous, allTime, missing: (sheetData?.deals ?? []).filter((deal) => !parseSheetDate(deal.date)).length, meetingMissing: Math.max(0, (sheetData?.booked ?? 0) - (sheetData?.meetings.length ?? 0)) };
   }, [sheetData, range, customStart, customEnd]);
 
@@ -179,7 +201,7 @@ export function Dashboard() {
   const payoutPeople = useMemo(() => [...closerRows, ...setters, ...(sheetData?.operators ?? [])].map((person) => ({ ...person, key: `${person.role}:${person.name}`, paid: person.paid + payouts.filter((p) => p.member === `${person.role}:${person.name}`).reduce((sum, p) => sum + p.amount, 0) })), [closerRows, setters, sheetData, payouts]);
   const filteredPayouts = useMemo(() => {
     if (range === "All time") return payouts;
-    const end = range === "Custom" ? new Date(`${customEnd} 23:59:59`) : new Date();
+    const end = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay();
     const start = range === "Custom" ? new Date(`${customStart} 00:00:00`) : rangeStart(range, end);
     return payouts.filter((payout) => { const date = new Date(`${payout.date} 12:00:00`); return date >= start && date <= end; });
   }, [payouts, range, customStart, customEnd]);
@@ -211,8 +233,8 @@ export function Dashboard() {
     </aside>
     {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
     <section className="content"><header className="topbar"><button className="menu-btn" onClick={() => setSidebarOpen(true)}>☰</button><div className="crumb"><span>Dashboards</span><b>/</b><strong>{tab}</strong></div><div className="top-actions"><button className="invite-btn" onClick={() => setModal("member")}>＋ Invite member</button></div></header>
-      <div className="dashboard"><div className="page-title"><div><h1>{client.name} <span>{tab}</span></h1><p>Live sales, team performance, and payouts in one place.</p></div><div className="title-actions"><button onClick={() => { void loadSheet(); notify("Dashboard refreshed"); }}>↻ <span>Refresh</span></button><button onClick={() => setActionMenu(!actionMenu)}>⋯</button>{actionMenu && <div className="action-menu"><button onClick={openSettings}>Workspace settings</button><button onClick={() => setModal("sheet")}>Manage data source</button></div>}</div></div>
-        <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className={`sheet-pill ${sheetStatus}`} onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : sheetStatus === "connected" ? "Google Sheets live" : sheetStatus === "error" ? "Sheet error" : "Connect sheet"}</button></div>
+      <div className="dashboard"><div className="page-title"><div><h1>{client.name} <span>{tab}</span></h1><p>Live sales, team performance, and payouts in one place.</p></div><div className="title-actions"><button onClick={() => void refreshDashboard()} disabled={refreshing}>{refreshing ? "…" : "↻"} <span>{refreshing ? "Refreshing" : "Refresh data"}</span></button><button onClick={() => setActionMenu(!actionMenu)}>⋯</button>{actionMenu && <div className="action-menu"><button onClick={openSettings}>Workspace settings</button><button onClick={() => setModal("sheet")}>Manage data source</button></div>}</div></div>
+        {activeNav !== "Team members" && <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className={`sheet-pill ${sheetStatus}`} onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : sheetStatus === "connected" ? `Google Sheets live${sheetData ? ` · ${sheetData.updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` : sheetStatus === "error" ? "Sheet error" : "Connect sheet"}</button></div>}
 
         {tab === "Overview" && <><div className="charts"><Chart data={period.cashSeries} labels={period.labels} color="#8b6cff" fill="rgba(139,108,255,.28)" label="Cash collected by payment date" total={money(period.cash)} /><Chart data={period.revenueSeries} labels={period.labels} color="#38d6b6" fill="rgba(56,214,182,.22)" label="Revenue generated by payment date" total={money(period.revenue)} /></div>
           {period.missing > 0 && <div className="data-warning">ⓘ {period.missing} closed {period.missing === 1 ? "deal is" : "deals are"} missing a Date Closed and excluded from date-range totals and charts.</div>}
@@ -221,6 +243,7 @@ export function Dashboard() {
             ["Cash collected", money(period.cash), period.cash, period.previous.cash],
             ["Revenue generated", money(period.revenue), period.revenue, period.previous.revenue],
             ["Closed deals", String(period.closed), period.closed, period.previous.closed],
+            ["Applications", String(period.applications), period.applications, period.previous.applications],
             ["Meetings booked", String(period.booked), period.booked, period.previous.booked],
             ["Meetings taken", String(period.taken), period.taken, period.previous.taken],
             ["Show rate", `${period.show.toFixed(2)}%`, period.show, period.previous.show],

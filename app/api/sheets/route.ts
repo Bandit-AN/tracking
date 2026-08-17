@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   }
 
   const source = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`;
-  const response = await fetch(source, { headers: { "User-Agent": "MoonRift/1.0" } });
+  const response = await fetch(source, { cache: "no-store", headers: { "User-Agent": "MoonRift/1.0", "Cache-Control": "no-cache" } });
   if (!response.ok) {
     return Response.json(
       { error: "The spreadsheet could not be read. Confirm that link sharing allows viewers." },
