@@ -363,3 +363,102 @@ export const syncRuns = pgTable(
   },
   (table) => [index("sync_runs_workspace_started_idx").on(table.workspaceId, table.startedAt)],
 );
+
+export const metaConnections = pgTable(
+  "meta_connections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: bigint("workspace_id", { mode: "number" })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    connectedByUserId: uuid("connected_by_user_id").references(
+      () => portalUsers.id,
+      { onDelete: "set null" },
+    ),
+    metaUserId: text("meta_user_id").notNull(),
+    metaUserName: text("meta_user_name").notNull().default(""),
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+    adAccountId: text("ad_account_id"),
+    adAccountName: text("ad_account_name").notNull().default(""),
+    currency: text("currency").notNull().default("USD"),
+    status: text("status").notNull().default("connected"),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("meta_connections_workspace_uidx").on(table.workspaceId),
+    index("meta_connections_status_idx").on(table.status),
+  ],
+);
+
+export const metaOauthStates = pgTable(
+  "meta_oauth_states",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    workspaceId: bigint("workspace_id", { mode: "number" })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => portalUsers.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("meta_oauth_states_expires_idx").on(table.expiresAt)],
+);
+
+export const metaAdInsights = pgTable(
+  "meta_ad_insights",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    workspaceId: bigint("workspace_id", { mode: "number" })
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    adAccountId: text("ad_account_id").notNull(),
+    campaignId: text("campaign_id").notNull(),
+    campaignName: text("campaign_name").notNull().default("Untitled campaign"),
+    date: date("date", { mode: "string" }).notNull(),
+    impressions: bigint("impressions", { mode: "number" }).notNull().default(0),
+    reach: bigint("reach", { mode: "number" }).notNull().default(0),
+    clicks: bigint("clicks", { mode: "number" }).notNull().default(0),
+    spend: numeric("spend", { precision: 14, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    leads: bigint("leads", { mode: "number" }).notNull().default(0),
+    purchases: bigint("purchases", { mode: "number" }).notNull().default(0),
+    purchaseValue: numeric("purchase_value", {
+      precision: 14,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    syncedAt: timestamp("synced_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("meta_ad_insights_workspace_campaign_date_uidx").on(
+      table.workspaceId,
+      table.adAccountId,
+      table.campaignId,
+      table.date,
+    ),
+    index("meta_ad_insights_workspace_date_idx").on(
+      table.workspaceId,
+      table.date,
+    ),
+  ],
+);

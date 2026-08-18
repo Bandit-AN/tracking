@@ -81,6 +81,46 @@ type Payout = {
   method: string;
   amount: number;
 };
+type MetaInsight = {
+  id: string;
+  workspaceId: number;
+  date: string;
+  adAccountId: string;
+  campaignId: string;
+  campaignName: string;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  spend: number;
+  leads: number;
+  purchases: number;
+  purchaseValue: number;
+};
+type MetaConnectionSummary = {
+  workspaceId: number;
+  adAccountName: string;
+  currency: string;
+  status: string;
+  lastSyncedAt: string | null;
+};
+type MetaIntegration = {
+  configured: boolean;
+  connected: boolean;
+  connection?: MetaConnectionSummary & {
+    metaUserName: string;
+    adAccountId: string | null;
+    tokenExpiresAt: string | null;
+    lastError: string | null;
+  };
+  accounts: Array<{
+    id: string;
+    name: string;
+    status?: number;
+    currency: string;
+    timezone: string;
+    businessName: string;
+  }>;
+};
 type DashboardData = {
   workspace: Workspace;
   performance: Person[];
@@ -89,6 +129,8 @@ type DashboardData = {
   attributionEvents: AttributionEvent[];
   applicantBaseline: number;
   payouts: Payout[];
+  metaInsights: MetaInsight[];
+  metaConnections: MetaConnectionSummary[];
   lastSync: {
     status: string;
     recordsImported: number;
@@ -154,7 +196,7 @@ function Chart({
 }: {
   data: number[];
   labels: string[];
-  title: "Cash collected" | "Revenue";
+  title: "Cash collected" | "Revenue" | "Meta ad spend";
   color: string;
   fill: string;
 }) {
@@ -259,21 +301,25 @@ function Chart({
 export function Dashboard({
   initialWorkspaces,
   currentUser,
+  initialWorkspaceId,
+  initialTab,
+  initialNotice,
 }: {
   initialWorkspaces: Workspace[];
   currentUser: { name: string; email: string; role: Role };
+  initialWorkspaceId: number;
+  initialTab: string;
+  initialNotice: string;
 }) {
   const router = useRouter();
   const [workspaces, setWorkspaces] = useState(initialWorkspaces);
-  const [workspaceId, setWorkspaceId] = useState(
-    currentUser.role === "admin" ? 0 : (initialWorkspaces[0]?.id ?? 0),
-  );
+  const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(
     currentUser.role === "admin" || Boolean(initialWorkspaces.length),
   );
   const [error, setError] = useState("");
-  const [tab, setTab] = useState("Overview");
+  const [tab, setTab] = useState(initialTab);
   const [range, setRange] = useState("Last 30 days");
   const [outcomeFilter, setOutcomeFilter] = useState("All outcomes");
   const [customStart, setCustomStart] = useState(() => {
@@ -283,13 +329,15 @@ export function Dashboard({
   });
   const [customEnd, setCustomEnd] = useState(new Date().toISOString().slice(0, 10));
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState(initialNotice);
   const [modal, setModal] = useState<
     "workspace" | "payout" | "account" | "edit-account" | null
   >(null);
   const [selectedUser, setSelectedUser] = useState<PortalUser | null>(null);
   const [users, setUsers] = useState<PortalUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [metaIntegration, setMetaIntegration] = useState<MetaIntegration | null>(null);
+  const [metaLoading, setMetaLoading] = useState(false);
 
   const notify = (message: string) => {
     setToast(message);
@@ -324,6 +372,43 @@ export function Dashboard({
       setUsersLoading(false);
     }
   }, [currentUser.role]);
+
+  const loadMetaIntegration = useCallback(async () => {
+    if (currentUser.role !== "admin" || workspaceId <= 0) return;
+    setMetaLoading(true);
+    try {
+      const response = await fetch(`/api/integrations/meta?workspaceId=${workspaceId}`);
+      if (!response.ok) throw new Error("Meta connection could not be loaded");
+      setMetaIntegration((await response.json()) as MetaIntegration);
+    } catch (loadError) {
+      notify(loadError instanceof Error ? loadError.message : "Meta connection failed");
+    } finally {
+      setMetaLoading(false);
+    }
+  }, [currentUser.role, workspaceId]);
+
+  useEffect(() => {
+    if (!initialNotice) return;
+    const timeout = window.setTimeout(() => setToast(""), 4200);
+    window.history.replaceState(null, "", "/dashboard");
+    return () => window.clearTimeout(timeout);
+  }, [initialNotice]);
+
+  useEffect(() => {
+    if (tab === "Settings" && workspaceId > 0 && currentUser.role === "admin") {
+      let cancelled = false;
+      void fetch(`/api/integrations/meta?workspaceId=${workspaceId}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Meta connection could not be loaded");
+          const integration = (await response.json()) as MetaIntegration;
+          if (!cancelled) setMetaIntegration(integration);
+        })
+        .catch((loadError: unknown) => {
+          if (!cancelled) notify(loadError instanceof Error ? loadError.message : "Meta connection failed");
+        });
+      return () => { cancelled = true; };
+    }
+  }, [currentUser.role, tab, workspaceId]);
 
   useEffect(() => {
     if (workspaceId === 0 && currentUser.role !== "admin") return;
@@ -364,9 +449,13 @@ export function Dashboard({
     const meetings = (data?.meetings ?? []).filter((meeting) => inRange(meeting.date));
     const attributionEvents = (data?.attributionEvents ?? []).filter((event) => inRange(event.date));
     const payouts = (data?.payouts ?? []).filter((payout) => inRange(payout.date));
-    const earliestDeal = deals.map((deal) => deal.date).filter(Boolean).sort()[0];
-    const chartStart = range === "All time" && earliestDeal
-      ? new Date(`${earliestDeal}T00:00:00`)
+    const metaInsights = (data?.metaInsights ?? []).filter((insight) => inRange(insight.date));
+    const earliestActivity = [
+      ...deals.map((deal) => deal.date).filter(Boolean),
+      ...metaInsights.map((insight) => insight.date),
+    ].sort()[0];
+    const chartStart = range === "All time" && earliestActivity
+      ? new Date(`${earliestActivity}T00:00:00`)
       : start;
     const totalDays = Math.max(
       1,
@@ -376,6 +465,7 @@ export function Dashboard({
     const bucketDays = Math.max(1, Math.ceil(totalDays / bucketCount));
     const cashSeries = Array(bucketCount).fill(0) as number[];
     const revenueSeries = Array(bucketCount).fill(0) as number[];
+    const metaSpendSeries = Array(bucketCount).fill(0) as number[];
     const labels = Array.from({ length: bucketCount }, (_, index) => {
       const date = new Date(chartStart);
       date.setDate(date.getDate() + index * bucketDays);
@@ -390,6 +480,49 @@ export function Dashboard({
       cashSeries[index] += deal.cash;
       revenueSeries[index] += deal.offer;
     });
+    metaInsights.forEach((insight) => {
+      const date = new Date(`${insight.date}T12:00:00`);
+      const index = Math.min(
+        bucketCount - 1,
+        Math.max(0, Math.floor((date.getTime() - chartStart.getTime()) / 86_400_000 / bucketDays)),
+      );
+      metaSpendSeries[index] += insight.spend;
+    });
+    const metaCampaignMap = new Map<string, {
+      workspaceId: number;
+      campaignId: string;
+      campaignName: string;
+      impressions: number;
+      reach: number;
+      clicks: number;
+      spend: number;
+      leads: number;
+      purchases: number;
+      purchaseValue: number;
+    }>();
+    for (const insight of metaInsights) {
+      const key = `${insight.workspaceId}:${insight.campaignId}`;
+      const campaign = metaCampaignMap.get(key) ?? {
+        workspaceId: insight.workspaceId,
+        campaignId: insight.campaignId,
+        campaignName: insight.campaignName,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
+        spend: 0,
+        leads: 0,
+        purchases: 0,
+        purchaseValue: 0,
+      };
+      campaign.impressions += insight.impressions;
+      campaign.reach += insight.reach;
+      campaign.clicks += insight.clicks;
+      campaign.spend += insight.spend;
+      campaign.leads += insight.leads;
+      campaign.purchases += insight.purchases;
+      campaign.purchaseValue += insight.purchaseValue;
+      metaCampaignMap.set(key, campaign);
+    }
     const rankByCash = (role: "closer" | "setter") => {
       const people = new Map<string, Person>();
       for (const deal of deals) {
@@ -499,12 +632,24 @@ export function Dashboard({
       payouts,
       cashSeries,
       revenueSeries,
+      metaSpendSeries,
       labels,
       cash: deals.reduce((sum, deal) => sum + deal.cash, 0),
       revenue: deals.reduce((sum, deal) => sum + deal.offer, 0),
       taken,
       crmCloses,
       applicants: applications.length + (data?.applicantBaseline ?? 0),
+      meta: {
+        insights: metaInsights,
+        campaigns: [...metaCampaignMap.values()].sort((left, right) => right.spend - left.spend),
+        spend: metaInsights.reduce((sum, insight) => sum + insight.spend, 0),
+        impressions: metaInsights.reduce((sum, insight) => sum + insight.impressions, 0),
+        reach: metaInsights.reduce((sum, insight) => sum + insight.reach, 0),
+        clicks: metaInsights.reduce((sum, insight) => sum + insight.clicks, 0),
+        leads: metaInsights.reduce((sum, insight) => sum + insight.leads, 0),
+        purchases: metaInsights.reduce((sum, insight) => sum + insight.purchases, 0),
+        purchaseValue: metaInsights.reduce((sum, insight) => sum + insight.purchaseValue, 0),
+      },
       workspacePerformance,
       sourceAttribution: [...sourceAttribution.values()].sort((left, right) => right.deals - left.deals),
       youtube: [...youtube.values()].sort((left, right) => {
@@ -631,6 +776,44 @@ export function Dashboard({
     }
   }
 
+  async function saveMetaAccount(adAccountId: string) {
+    setMetaLoading(true);
+    try {
+      const result = await submitJson("/api/integrations/meta", "PATCH", {
+        workspaceId,
+        adAccountId,
+      }) as { recordsImported?: number };
+      await Promise.all([loadMetaIntegration(), loadDashboard()]);
+      notify(`Meta connected · ${result.recordsImported ?? 0} campaign-day records synced`);
+    } finally {
+      setMetaLoading(false);
+    }
+  }
+
+  async function syncMetaData() {
+    setMetaLoading(true);
+    try {
+      const result = await submitJson("/api/integrations/meta", "POST", { workspaceId }) as { recordsImported?: number };
+      await Promise.all([loadMetaIntegration(), loadDashboard()]);
+      notify(`${result.recordsImported ?? 0} Meta campaign-day records synced`);
+    } finally {
+      setMetaLoading(false);
+    }
+  }
+
+  async function disconnectMeta() {
+    if (!window.confirm("Disconnect Meta and remove its imported ad insights from this workspace?")) return;
+    setMetaLoading(true);
+    try {
+      await submitJson("/api/integrations/meta", "DELETE", { workspaceId });
+      setMetaIntegration({ configured: true, connected: false, accounts: [] });
+      await loadDashboard();
+      notify("Meta disconnected");
+    } finally {
+      setMetaLoading(false);
+    }
+  }
+
   async function toggleUser(user: PortalUser) {
     const nextStatus = user.status === "active" ? "disabled" : "active";
     try {
@@ -655,14 +838,15 @@ export function Dashboard({
 
   const navigation = [
     "Overview",
+    "Media",
     "Sales CRM",
     ...(currentUser.role === "student" ? [] : ["Team", "Payouts"]),
     ...(currentUser.role === "admin" ? ["Users", "Settings"] : []),
   ];
   const currentWorkspace = data?.workspace ?? workspaces.find((item) => item.id === workspaceId);
   const currentWorkspaceLogo = workspaceAvatar(currentWorkspace);
-  const pageHeading = workspaceId === 0 && tab === "Overview"
-    ? "Agency Overview"
+  const pageHeading = workspaceId === 0
+    ? (tab === "Overview" ? "Agency Overview" : `Agency ${tab}`)
     : `${currentWorkspace?.name ?? "MoonRift Media"}${tab === "Overview" ? " Overview" : ` ${tab}`}`;
 
   return (
@@ -719,7 +903,7 @@ export function Dashboard({
               className={tab === item ? "active" : ""}
               onClick={() => { setTab(item); setSidebarOpen(false); if (item === "Users") void loadUsers(); }}
             >
-              <span>{item === "Overview" ? "⌂" : item === "Sales CRM" ? "◇" : item === "Team" ? "♙" : item === "Payouts" ? "$" : "⚙"}</span>
+              <span>{item === "Overview" ? "⌂" : item === "Media" ? "▥" : item === "Sales CRM" ? "◇" : item === "Team" ? "♙" : item === "Payouts" ? "$" : "⚙"}</span>
               {item}
             </button>
           ))}
@@ -798,6 +982,19 @@ export function Dashboard({
             <SalesCrm meetings={period.meetings} outcome={outcomeFilter} onOutcomeChange={setOutcomeFilter} />
           )}
 
+          {!loading && !error && data && tab === "Media" && (
+            <MetaAdsDashboard
+              meta={period.meta}
+              spendSeries={period.metaSpendSeries}
+              labels={period.labels}
+              connections={data.metaConnections}
+              workspaces={workspaces}
+              isAgency={workspaceId === 0}
+              canManage={currentUser.role === "admin"}
+              onOpenSettings={() => setTab("Settings")}
+            />
+          )}
+
           {!loading && !error && data && tab === "Team" && <div className="leaderboard-stack team-leaderboards"><RankedPerformanceTable title="Top closers" people={period.closers} /><RankedPerformanceTable title="Top setters" people={period.setters} /></div>}
 
           {!loading && !error && data && tab === "Payouts" && (
@@ -811,6 +1008,15 @@ export function Dashboard({
           {!loading && !error && data && tab === "Settings" && (
             workspaceId === 0 ? <div className="state-card"><b>Select a client subaccount</b><p>Settings and deletion apply to one client subaccount at a time.</p></div> :
             <section className="settings-page">
+              <MetaIntegrationSettings
+                key={workspaceId}
+                integration={metaIntegration}
+                loading={metaLoading}
+                workspaceId={workspaceId}
+                onSelect={(accountId) => void saveMetaAccount(accountId).catch((submitError) => notify(submitError instanceof Error ? submitError.message : "Meta account could not be saved"))}
+                onSync={() => void syncMetaData().catch((submitError) => notify(submitError instanceof Error ? submitError.message : "Meta sync failed"))}
+                onDisconnect={() => void disconnectMeta().catch((submitError) => notify(submitError instanceof Error ? submitError.message : "Meta could not be disconnected"))}
+              />
               <form className="settings-card" onSubmit={(event) => { event.preventDefault(); void updateWorkspace(new FormData(event.currentTarget)).catch((submitError) => notify(submitError instanceof Error ? submitError.message : "Settings could not be saved")); }}>
                 <div><h2>Data source settings</h2><p>Choose the Google Sheet this subaccount imports from.</p></div>
                 <label>Client or offer name</label><input name="name" defaultValue={data.workspace.name} required />
@@ -838,6 +1044,178 @@ export function Dashboard({
       </Modal>}
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </div>
+  );
+}
+
+function MetaIntegrationSettings({
+  integration,
+  loading,
+  workspaceId,
+  onSelect,
+  onSync,
+  onDisconnect,
+}: {
+  integration: MetaIntegration | null;
+  loading: boolean;
+  workspaceId: number;
+  onSelect: (accountId: string) => void;
+  onSync: () => void;
+  onDisconnect: () => void;
+}) {
+  const [selectedAccount, setSelectedAccount] = useState("");
+  const effectiveAccount = selectedAccount || integration?.connection?.adAccountId || "";
+
+  return (
+    <article className="settings-card integration-card">
+      <div className="integration-heading">
+        <span className="meta-mark">f</span>
+        <div>
+          <h2>Meta Ads</h2>
+          <p>Connect this client&apos;s Facebook ad account and sync campaign performance automatically.</p>
+        </div>
+        <span className={`integration-status ${integration?.connected ? "connected" : ""}`}>
+          {integration?.connected ? "Connected" : "Not connected"}
+        </span>
+      </div>
+      {loading && !integration && <p>Loading Meta connection…</p>}
+      {integration && !integration.configured && (
+        <div className="integration-notice">
+          <b>Meta app configuration required</b>
+          <p>Add the Meta App ID, App Secret, token-encryption key, and production application URL in Vercel before connecting clients.</p>
+        </div>
+      )}
+      {integration?.configured && !integration.connected && (
+        <div className="integration-actions">
+          <a className="meta-connect" href={`/api/integrations/meta/connect?workspaceId=${workspaceId}`}>
+            Connect Meta
+          </a>
+          <small>The client signs into Facebook and grants read-only advertising access.</small>
+        </div>
+      )}
+      {integration?.connected && (
+        <>
+          <div className="connection-summary">
+            <div><span>Connected as</span><b>{integration.connection?.metaUserName || "Meta user"}</b></div>
+            <div><span>Last synced</span><b>{integration.connection?.lastSyncedAt ? new Date(integration.connection.lastSyncedAt).toLocaleString() : "Waiting for first sync"}</b></div>
+          </div>
+          <label>Facebook ad account</label>
+          <select
+            value={effectiveAccount}
+            onChange={(event) => setSelectedAccount(event.target.value)}
+            disabled={loading}
+          >
+            <option value="">Select an ad account</option>
+            {integration.accounts.map((account) => (
+              <option key={account.id} value={account.id} disabled={account.status !== undefined && account.status !== 1}>
+                {account.name} · {account.id}{account.businessName ? ` · ${account.businessName}` : ""}
+              </option>
+            ))}
+          </select>
+          {integration.connection?.lastError && <p className="integration-error">{integration.connection.lastError}</p>}
+          <div className="integration-buttons">
+            <button type="button" disabled={loading || !effectiveAccount} onClick={() => onSelect(effectiveAccount)}>
+              {loading ? "Working…" : "Save account & sync"}
+            </button>
+            <button type="button" disabled={loading || !integration.connection?.adAccountId} onClick={onSync}>Sync now</button>
+            <button type="button" className="disconnect-button" disabled={loading} onClick={onDisconnect}>Disconnect</button>
+          </div>
+          <small className="field-help">Tokens are encrypted server-side. Portal users and client browsers never receive Meta credentials.</small>
+        </>
+      )}
+    </article>
+  );
+}
+
+function MetaAdsDashboard({
+  meta,
+  spendSeries,
+  labels,
+  connections,
+  workspaces,
+  isAgency,
+  canManage,
+  onOpenSettings,
+}: {
+  meta: {
+    campaigns: Array<{
+      workspaceId: number;
+      campaignId: string;
+      campaignName: string;
+      impressions: number;
+      reach: number;
+      clicks: number;
+      spend: number;
+      leads: number;
+      purchases: number;
+      purchaseValue: number;
+    }>;
+    spend: number;
+    impressions: number;
+    reach: number;
+    clicks: number;
+    leads: number;
+    purchases: number;
+    purchaseValue: number;
+  };
+  spendSeries: number[];
+  labels: string[];
+  connections: MetaConnectionSummary[];
+  workspaces: Workspace[];
+  isAgency: boolean;
+  canManage: boolean;
+  onOpenSettings: () => void;
+}) {
+  const number = (value: number) => new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value || 0);
+  const workspaceName = (id: number) => workspaces.find((workspace) => workspace.id === id)?.name || `Workspace ${id}`;
+  const ctr = meta.impressions ? (meta.clicks / meta.impressions) * 100 : 0;
+  const cpc = meta.clicks ? meta.spend / meta.clicks : 0;
+  const cpl = meta.leads ? meta.spend / meta.leads : 0;
+  const roas = meta.spend ? meta.purchaseValue / meta.spend : 0;
+  const activeConnections = connections.filter((connection) => connection.status === "active").length;
+
+  return (
+    <section className="meta-dashboard">
+      <div className="meta-dashboard-head">
+        <div><span>META ADS</span><h2>{isAgency ? "Agency paid media performance" : "Facebook advertising performance"}</h2><p>Read-only campaign insights synced from Meta&apos;s Marketing API.</p></div>
+        <div className="meta-connection-count"><i /> {activeConnections} connected {activeConnections === 1 ? "account" : "accounts"}</div>
+      </div>
+      {!connections.length && !meta.campaigns.length ? (
+        <div className="state-card">
+          <b>No Meta ad account connected</b>
+          <p>{isAgency ? "Connect Meta inside each client workspace to build the agency-wide view." : "Connect a Facebook ad account to begin importing spend and campaign results."}</p>
+          {canManage && !isAgency && <button onClick={onOpenSettings}>Open integration settings</button>}
+        </div>
+      ) : (
+        <>
+          <div className="meta-kpis">
+            <article><span>Ad spend</span><strong>{money(meta.spend)}</strong></article>
+            <article><span>Impressions</span><strong>{number(meta.impressions)}</strong></article>
+            <article><span>Reach</span><strong>{number(meta.reach)}</strong></article>
+            <article><span>Clicks</span><strong>{number(meta.clicks)}</strong></article>
+            <article><span>CTR</span><strong>{ctr.toFixed(2)}%</strong></article>
+            <article><span>CPC</span><strong>{money(cpc)}</strong></article>
+            <article><span>Meta leads</span><strong>{number(meta.leads)}</strong></article>
+            <article><span>Cost per lead</span><strong>{money(cpl)}</strong></article>
+            <article><span>Purchases</span><strong>{number(meta.purchases)}</strong></article>
+            <article><span>Meta ROAS</span><strong>{roas.toFixed(2)}×</strong></article>
+          </div>
+          <div className="meta-chart"><Chart data={spendSeries} labels={labels} title="Meta ad spend" color="#3b82f6" fill="rgba(59,130,246,.3)" /></div>
+          <article className="table-card meta-campaigns">
+            <div className="section-head"><div><h2>Campaign performance</h2><p>Meta-reported results for the selected portal date range</p></div></div>
+            <div className="table-wrap"><table><thead><tr>{isAgency && <th>Workspace</th>}<th>Campaign</th><th>Spend</th><th>Impressions</th><th>Clicks</th><th>CTR</th><th>Leads</th><th>CPL</th><th>Purchases</th><th>ROAS</th></tr></thead><tbody>
+              {meta.campaigns.map((campaign) => {
+                const campaignCtr = campaign.impressions ? (campaign.clicks / campaign.impressions) * 100 : 0;
+                const campaignCpl = campaign.leads ? campaign.spend / campaign.leads : 0;
+                const campaignRoas = campaign.spend ? campaign.purchaseValue / campaign.spend : 0;
+                return <tr key={`${campaign.workspaceId}:${campaign.campaignId}`}>{isAgency && <td>{workspaceName(campaign.workspaceId)}</td>}<td><b>{campaign.campaignName}</b></td><td>{money(campaign.spend)}</td><td>{number(campaign.impressions)}</td><td>{number(campaign.clicks)}</td><td>{campaignCtr.toFixed(2)}%</td><td>{number(campaign.leads)}</td><td>{money(campaignCpl)}</td><td>{number(campaign.purchases)}</td><td>{campaignRoas.toFixed(2)}×</td></tr>;
+              })}
+              {!meta.campaigns.length && <tr><td colSpan={isAgency ? 10 : 9}>No Meta campaign activity in this date range.</td></tr>}
+            </tbody></table></div>
+          </article>
+          <p className="meta-attribution-note">Leads, purchases, purchase value, and ROAS are Meta-attributed results. Your Sales CRM remains the source of truth for booked calls, closes, cash collected, and contracted revenue.</p>
+        </>
+      )}
+    </section>
   );
 }
 

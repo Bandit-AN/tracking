@@ -11,6 +11,7 @@ MoonRift Media.
 - Server-side role and client-subaccount authorization for all portal reads and writes
 - Agency-wide aggregate performance plus isolated client offer views
 - Administrator-only Google Sheets ingestion into normalized Neon records
+- Native workspace-level Meta Ads OAuth with encrypted tokens and daily reporting sync
 
 The production application URL is `https://app.moonriftmedia.com`. The Vercel
 project domain `https://tracking-five-beta.vercel.app` remains available as the
@@ -121,6 +122,47 @@ Create an organization-scoped Calendly webhook subscription for
 requires an owner/admin token and an eligible paid Calendly plan for this
 organization-wide webhook. Never expose the token or webhook secret to browser
 code.
+
+## Native Meta Ads connection
+
+Each client workspace has a **Settings → Meta Ads** integration. An
+administrator clicks **Connect Meta**, completes Facebook OAuth, selects one
+authorized ad account, and imports the previous 90 days of daily campaign
+insights. Vercel then refreshes the most recent 30 days every day. The Media
+page reports spend, impressions, reach, clicks, CTR, CPC, Meta leads, CPL,
+purchases, purchase value, ROAS, and campaign performance. Agency view combines
+all connected workspaces.
+
+Create a Meta Business app and configure this exact OAuth redirect URI:
+
+```text
+https://app.moonriftmedia.com/api/integrations/meta/callback
+```
+
+Request read-only `ads_read` access. Client-owned ad accounts require Advanced
+Access and Meta App Review before general onboarding. Add the privacy-policy
+and data-deletion URLs required by Meta, complete MoonRift business
+verification, and keep the app in Development mode until review testing is
+complete.
+
+Production requires these server-only Vercel variables:
+
+- `APP_URL=https://app.moonriftmedia.com`
+- `META_APP_ID`
+- `META_APP_SECRET`
+- `META_LOGIN_CONFIG_ID` when using Facebook Login for Business
+- `META_GRAPH_API_VERSION` (currently configured as `v24.0`; update deliberately when Meta versions change)
+- `META_TOKEN_ENCRYPTION_KEY` (32 random bytes as base64, or 64 hex characters)
+- `CRON_SECRET`
+
+Never prefix these values with `NEXT_PUBLIC_`. OAuth access tokens are encrypted
+with AES-256-GCM before database storage, are never returned by portal APIs,
+and are deleted with their workspace or when an administrator disconnects
+Meta. OAuth state is bound to the authenticated administrator and expires after
+10 minutes.
+
+The production cron invokes `/api/cron/meta-ads` daily at 09:15 UTC. Manual
+sync remains available from workspace settings.
 
 ## Validation
 

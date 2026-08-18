@@ -11,6 +11,8 @@ test("protected data routes require server authorization", async () => {
       "app/api/workspaces/route.ts",
       "app/api/workspaces/[id]/sync/route.ts",
       "app/api/admin/users/route.ts",
+      "app/api/integrations/meta/route.ts",
+      "app/api/integrations/meta/connect/route.ts",
     ].map((path) => readFile(new URL(path, root), "utf8")),
   );
   routes.forEach((route) => assert.match(route, /requireApiUser\(\)/));
@@ -32,11 +34,32 @@ test("secret environment variables are server-only", async () => {
       "lib/calendly.ts",
       "db/index.ts",
       "app/api/workspaces/route.ts",
+      "lib/meta.ts",
     ].map((path) => readFile(new URL(path, root), "utf8")),
   );
   const source = files.join("\n");
   assert.doesNotMatch(source, /NEXT_PUBLIC_(DATABASE|POSTGRES|NEON_AUTH_COOKIE)/);
   assert.doesNotMatch(source, /NEXT_PUBLIC_(CALENDLY|GOOGLE_SHEETS_BOOKING)/);
+  assert.doesNotMatch(source, /NEXT_PUBLIC_META_/);
+});
+
+test("Meta OAuth is workspace-bound, encrypted, read-only, and cron protected", async () => {
+  const [connect, callback, integration, meta, cron] = await Promise.all([
+    readFile(new URL("app/api/integrations/meta/connect/route.ts", root), "utf8"),
+    readFile(new URL("app/api/integrations/meta/callback/route.ts", root), "utf8"),
+    readFile(new URL("app/api/integrations/meta/route.ts", root), "utf8"),
+    readFile(new URL("lib/meta.ts", root), "utf8"),
+    readFile(new URL("app/api/cron/meta-ads/route.ts", root), "utf8"),
+  ]);
+  assert.match(connect, /scope", "ads_read"/);
+  assert.match(connect, /randomBytes\(32\)/);
+  assert.match(callback, /metaOauthStates/);
+  assert.match(callback, /encryptMetaToken/);
+  assert.doesNotMatch(`${connect}\n${callback}\n${integration}`, /access_token.*Response\.json/i);
+  assert.match(meta, /aes-256-gcm/);
+  assert.match(meta, /appsecret_proof/);
+  assert.match(integration, /requireAdmin/);
+  assert.match(cron, /Bearer \$\{cronSecret\}/);
 });
 
 test("Calendly webhook authenticates, validates resources, and filters event type", async () => {
@@ -85,6 +108,8 @@ test("authenticated dashboard retains its responsive layout hooks", async () => 
   assert.match(dashboard, /Top setters/);
   assert.match(dashboard, /ConversionFunnel/);
   assert.match(dashboard, /AgencyWorkspacePerformance/);
+  assert.match(dashboard, /MetaAdsDashboard/);
+  assert.match(dashboard, /MetaIntegrationSettings/);
   assert.match(dashboard, /title="Cash collected"/);
   assert.match(dashboard, /title="Revenue"/);
   assert.doesNotMatch(dashboard, /by payment date/i);

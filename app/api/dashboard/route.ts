@@ -4,6 +4,8 @@ import {
   applicantEvents,
   deals,
   meetings,
+  metaAdInsights,
+  metaConnections,
   payouts,
   syncRuns,
   teamMembers,
@@ -40,6 +42,8 @@ export async function GET(request: Request) {
     applicantBaselineRows,
     payoutRows,
     syncRows,
+    metaInsightRows,
+    metaConnectionRows,
   ] =
     await Promise.all([
       isAgency
@@ -203,6 +207,35 @@ export async function GET(request: Request) {
         .where(isAgency ? undefined : eq(syncRuns.workspaceId, workspaceId))
         .orderBy(desc(syncRuns.startedAt))
         .limit(1),
+      db
+        .select({
+          id: metaAdInsights.id,
+          workspaceId: metaAdInsights.workspaceId,
+          date: metaAdInsights.date,
+          adAccountId: metaAdInsights.adAccountId,
+          campaignId: metaAdInsights.campaignId,
+          campaignName: metaAdInsights.campaignName,
+          impressions: metaAdInsights.impressions,
+          reach: metaAdInsights.reach,
+          clicks: metaAdInsights.clicks,
+          spend: metaAdInsights.spend,
+          leads: metaAdInsights.leads,
+          purchases: metaAdInsights.purchases,
+          purchaseValue: metaAdInsights.purchaseValue,
+        })
+        .from(metaAdInsights)
+        .where(isAgency ? undefined : eq(metaAdInsights.workspaceId, workspaceId))
+        .orderBy(desc(metaAdInsights.date)),
+      db
+        .select({
+          workspaceId: metaConnections.workspaceId,
+          adAccountName: metaConnections.adAccountName,
+          currency: metaConnections.currency,
+          status: metaConnections.status,
+          lastSyncedAt: metaConnections.lastSyncedAt,
+        })
+        .from(metaConnections)
+        .where(isAgency ? undefined : eq(metaConnections.workspaceId, workspaceId)),
     ]);
 
   if (!workspaceRows[0]) {
@@ -221,6 +254,8 @@ export async function GET(request: Request) {
     applicantBaseline: Number(applicantBaselineRows[0]?.value ?? 0),
     payouts: payoutRows,
     lastSync: syncRows[0] ?? null,
+    metaInsights: metaInsightRows,
+    metaConnections: metaConnectionRows,
     permissions: {
       canManage:
         authResult.context.portalUser.role === "admin" && !isAgency,
