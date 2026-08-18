@@ -139,6 +139,11 @@ Create a Meta Business app and configure this exact OAuth redirect URI:
 https://app.moonriftmedia.com/api/integrations/meta/callback
 ```
 
+Use these public app-review URLs:
+
+- Privacy Policy: `https://app.moonriftmedia.com/privacy`
+- Data deletion instructions: `https://app.moonriftmedia.com/data-deletion`
+
 Request read-only `ads_read` access. Client-owned ad accounts require Advanced
 Access and Meta App Review before general onboarding. Add the privacy-policy
 and data-deletion URLs required by Meta, complete MoonRift business
