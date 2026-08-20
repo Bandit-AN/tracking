@@ -10,7 +10,13 @@ const schema = "CREATE TABLE IF NOT EXISTS support_messages (id INTEGER PRIMARY 
 async function setupD1(db: Binding) { await db.prepare(schema).bind().run(); await db.prepare("CREATE INDEX IF NOT EXISTS idx_support_messages_status_created ON support_messages(status,created_at)").bind().run(); }
 async function neon(runtime: RuntimeEnv) { if (!runtime.DATABASE_URL) return null; const { neon } = await import("@neondatabase/serverless"); const sql = neon(runtime.DATABASE_URL); await sql.query("CREATE TABLE IF NOT EXISTS support_messages (id BIGINT PRIMARY KEY, workspace_id BIGINT NOT NULL, workspace_name TEXT NOT NULL, sender_email TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), resolved_at TIMESTAMPTZ)"); await sql.query("CREATE INDEX IF NOT EXISTS idx_support_messages_status_created ON support_messages(status,created_at)"); return sql; }
 const emailFor = (request: Request) => request.headers.get("oai-authenticated-user-email") || "local-preview@moonrift.media";
-const isAdmin = (runtime: RuntimeEnv, email: string) => (runtime.MOONRIFT_ADMIN_EMAILS || "peterphan441@gmail.com").split(",").map((x) => x.trim().toLowerCase()).includes(email.toLowerCase());
+const isAdmin = (runtime: RuntimeEnv, email: string) => {
+  const approvedEmails = new Set([
+    "peterphan441@gmail.com",
+    ...(runtime.MOONRIFT_ADMIN_EMAILS || "").split(","),
+  ].map((value) => value.trim().toLowerCase()).filter(Boolean));
+  return approvedEmails.has(email.toLowerCase());
+};
 const normalize = (row: Record<string, unknown>) => ({ id: Number(row.id), workspaceId: Number(row.workspace_id), workspaceName: row.workspace_name, senderEmail: row.sender_email, message: row.message, status: row.status, createdAt: row.created_at });
 
 export async function GET(request: Request) {
