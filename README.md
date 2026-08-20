@@ -92,6 +92,27 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## Meta Ads OAuth
+
+MoonRift uses Meta's browser authorization flow instead of asking workspace
+users to paste access tokens. Configure a Meta Business app with the Marketing
+API and Facebook Login for Business, then set:
+
+- `META_APP_ID`
+- `META_APP_SECRET`
+- `META_LOGIN_CONFIG_ID` (optional; use when a Login for Business configuration is enabled)
+- `META_GRAPH_API_VERSION` (defaults to `v25.0`)
+
+Add these exact Valid OAuth Redirect URIs in the Meta app:
+
+- `https://app.moonriftmedia.com/api/meta/oauth/callback`
+- `https://metricly-client-intelligence.peterphan441.chatgpt.site/api/meta/oauth/callback`
+
+The connection requests read-only `ads_read` and `business_management`
+permissions, exchanges the authorization code server-side, and stores the
+long-lived token encrypted per workspace. Apps connecting ad accounts owned by
+people outside the app's roles require Meta App Review and Advanced Access.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)

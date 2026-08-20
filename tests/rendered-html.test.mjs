@@ -17,12 +17,18 @@ test("server-renders the MoonRift dashboard shell", async () => {
 });
 
 test("keeps requested data integrations and views in source", async () => {
-  const [dashboard, sheets, meta, support] = await Promise.all([
+  const [dashboard, sheets, meta, support, metaStart, metaCallback, metaStore, metaSelect] = await Promise.all([
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/sheets/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/meta/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/support/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/meta/oauth/start/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/meta/oauth/callback/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/meta-store.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/meta/select/page.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(dashboard, /Close rate/); assert.match(dashboard, /Application → booking/); assert.match(dashboard, /CRM ROAS/); assert.match(dashboard, /Agency Inbox/); assert.match(dashboard, /Co-owner/);
   assert.match(sheets, /Payouts/); assert.match(sheets, /Booked Calls/); assert.match(meta, /graph\.facebook\.com/); assert.match(support, /support_messages/);
+  assert.match(dashboard, /Continue with Facebook/); assert.doesNotMatch(dashboard, /Long-lived access token/);
+  assert.match(metaStart, /ads_read,business_management/); assert.match(metaCallback, /exchangeOauthCode/); assert.match(metaStore, /AES-GCM/); assert.match(metaStore, /meta_oauth_sessions/); assert.match(metaSelect, /Choose an ad account/);
 });
