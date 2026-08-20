@@ -14,7 +14,11 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "MoonRift — Client Revenue Intelligence",
     description: "A modern multi-client sales and revenue performance dashboard.",
-    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+    icons: {
+      icon: [{ url: "/moonriftmedia-logo.jpg", type: "image/jpeg" }],
+      shortcut: "/moonriftmedia-logo.jpg",
+      apple: "/moonriftmedia-logo.jpg",
+    },
     openGraph: { title: "MoonRift", description: "Every client. One clear view.", images: [{ url: image, width: 1792, height: 915 }] },
     twitter: { card: "summary_large_image", title: "MoonRift", description: "Every client. One clear view.", images: [image] },
   };

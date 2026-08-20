@@ -11,16 +11,15 @@ type Payout = { id: number; workspaceId: number; member: string; date: string; m
 type MetaInsight = { date_start: string; ad_id?: string; ad_name?: string; campaign_name?: string; spend: string; impressions?: string; clicks?: string };
 type SupportMessage = { id: number; workspaceId: number; workspaceName: string; senderEmail: string; message: string; status: "open" | "resolved"; createdAt: string };
 type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; bookings: Booking[]; sheetPayouts: Payout[]; applicationDates: string[]; duplicateDealsRemoved: number; updatedAt: Date };
+type AgencySource = { client: Client; data: SheetMetrics };
 
 const sheetUrlDefault = "https://docs.google.com/spreadsheets/d/1ahyY64u9uYmcEDFi1XAJRFmnZ_gX_6VQHUnWvswkvmg/edit?usp=sharing";
+const agencyClient: Client = { id: 0, name: "Agency view", industry: "All connected offers", initials: "MR", color: "#8b6cff", avatar: "/moonriftmedia-logo.jpg" };
+const sellerSyndicateLogo = "/seller-syndicate-logo.png";
 const clientsSeed: Client[] = [
-  { id: 1, name: "Seller Syndicate", industry: "Sales workspace", initials: "SS", color: "#7646ff" },
+  agencyClient,
+  { id: 1, name: "Seller Syndicate", industry: "Sales workspace", initials: "SS", color: "#7646ff", avatar: sellerSyndicateLogo },
 ];
-const fallbackPeople: Person[] = [
-  { name: "Dillon Reed", role: "Closer", calls: 40, closed: 31, cash: 97850, revenue: 128000, commission: 9785, paid: 6000 },
-  { name: "Zain Carter", role: "Closer", calls: 22, closed: 16, cash: 66000, revenue: 94500, commission: 6600, paid: 4000 },
-];
-
 const money = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value || 0);
 const numeric = (value = "") => Number(value.replace(/[$,%\s,]/g, "")) || 0;
 const sheetIdFromUrl = (value: string) => value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1] ?? value.trim();
@@ -94,18 +93,43 @@ function rangeStart(range: string, now: Date) {
 
 const percentChange = (current: number, previous: number) => previous === 0 ? (current > 0 ? 100 : 0) : (current - previous) / previous * 100;
 
+function combineAgencyMetrics(sources: AgencySource[]): SheetMetrics {
+  const mergePeople = (key: "closers" | "setters" | "operators") => {
+    const people = new Map<string, Person>();
+    sources.forEach(({ data }) => data[key].forEach((person) => {
+      const id = `${person.role}:${person.name.toLowerCase()}`;
+      const current = people.get(id);
+      if (current) {
+        current.calls += person.calls; current.closed += person.closed; current.cash += person.cash;
+        current.revenue += person.revenue; current.commission += person.commission; current.paid += person.paid;
+      } else people.set(id, { ...person });
+    }));
+    return [...people.values()].sort((a, b) => b.cash - a.cash);
+  };
+  const booked = sources.reduce((sum, { data }) => sum + data.booked, 0);
+  const taken = sources.reduce((sum, { data }) => sum + data.taken, 0);
+  return {
+    booked, taken, showRate: booked ? taken / booked * 100 : 0,
+    closers: mergePeople("closers"), setters: mergePeople("setters"), operators: mergePeople("operators"),
+    deals: sources.flatMap(({ data }) => data.deals), meetings: sources.flatMap(({ data }) => data.meetings),
+    bookings: sources.flatMap(({ data }) => data.bookings), sheetPayouts: sources.flatMap(({ data }) => data.sheetPayouts),
+    applicationDates: sources.flatMap(({ data }) => data.applicationDates),
+    duplicateDealsRemoved: sources.reduce((sum, { data }) => sum + data.duplicateDealsRemoved, 0), updatedAt: new Date(),
+  };
+}
+
 function Chart({ data, labels, color, fill, label, total }: { data: number[]; labels: string[]; color: string; fill: string; label: string; total: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [hover, setHover] = useState<{ index: number; x: number } | null>(null);
+  const [hover, setHover] = useState<{ index: number; x: number; y: number } | null>(null);
   useEffect(() => {
     const el = canvas.current; if (!el) return;
     const render = () => {
       const ratio = window.devicePixelRatio || 1; const { width, height } = el.getBoundingClientRect();
       el.width = width * ratio; el.height = height * ratio;
       const ctx = el.getContext("2d"); if (!ctx) return; ctx.scale(ratio, ratio);
-      const values = data.length > 1 ? data : [0, ...(data || [0])]; const max = Math.max(...values, 1) * 1.12;
+      const values = data.length ? data : [0]; const max = Math.max(...values, 1) * 1.12;
       for (let i = 0; i < 4; i++) { const y = 15 + ((height - 30) / 3) * i; ctx.strokeStyle = "rgba(130,120,150,.16)"; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
-      const points = values.map((v, i) => ({ x: 8 + i / (values.length - 1) * (width - 16), y: height - 15 - v / max * (height - 30) }));
+      const points = values.map((v, i) => ({ x: values.length === 1 ? width / 2 : 8 + i / (values.length - 1) * (width - 16), y: height - 15 - v / max * (height - 30) }));
       const gradient = ctx.createLinearGradient(0, 0, 0, height); gradient.addColorStop(0, fill); gradient.addColorStop(1, "rgba(0,0,0,0)");
       ctx.beginPath(); ctx.moveTo(points[0].x, height); points.forEach((p) => ctx.lineTo(p.x, p.y)); ctx.lineTo(points.at(-1)!.x, height); ctx.closePath(); ctx.fillStyle = gradient; ctx.fill();
       ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.stroke();
@@ -114,7 +138,7 @@ function Chart({ data, labels, color, fill, label, total }: { data: number[]; la
     render(); const ro = new ResizeObserver(render); ro.observe(el); return () => ro.disconnect();
   }, [data, color, fill]);
   const peak = data.length ? Math.max(...data) : 0; const peakIndex = data.indexOf(peak);
-  return <article className="chart-card"><div className="chart-head"><div><span className="chart-dot" style={{ background: color }} />{label}<small>Peak {labels[peakIndex] ?? "—"}: {money(peak)}</small></div><strong>{total}</strong></div><div className="chart-canvas-wrap"><canvas ref={canvas} aria-label={`${label} by payment date`} onMouseLeave={() => setHover(null)} onMouseMove={(event) => { const rect = event.currentTarget.getBoundingClientRect(); const x = event.clientX - rect.left; const index = Math.max(0, Math.min(data.length - 1, Math.round((x - 8) / Math.max(1, rect.width - 16) * (data.length - 1)))); setHover({ index, x }); }} />{hover && data[hover.index] !== undefined && <div className="chart-tooltip" style={{ left: hover.x }}><b>{labels[hover.index]}</b><span>{money(data[hover.index])}</span></div>}</div><div className="chart-axis">{labels.filter((_, i) => i % Math.max(1, Math.ceil(labels.length / 5)) === 0 || i === labels.length - 1).map((x, i) => <span key={`${x}-${i}`}>{x}</span>)}</div></article>;
+  return <article className="chart-card"><div className="chart-head"><div><span className="chart-dot" style={{ background: color }} />{label}<small>Peak {labels[peakIndex] ?? "—"}: {money(peak)}</small></div><strong>{total}</strong></div><div className="chart-canvas-wrap"><canvas ref={canvas} aria-label={`${label} by payment date`} onMouseLeave={() => setHover(null)} onMouseMove={(event) => { if (!data.length) return; const rect = event.currentTarget.getBoundingClientRect(); const pointerX = event.clientX - rect.left; const index = Math.max(0, Math.min(data.length - 1, Math.round((pointerX - 8) / Math.max(1, rect.width - 16) * (data.length - 1)))); const x = data.length === 1 ? rect.width / 2 : 8 + index / (data.length - 1) * (rect.width - 16); const max = Math.max(...data, 1) * 1.12; const y = rect.height - 15 - data[index] / max * (rect.height - 30); setHover({ index, x, y }); }} />{hover && data[hover.index] !== undefined && <div className="chart-tooltip" style={{ left: hover.x, top: hover.y }}><b>{labels[hover.index]}</b><span>{money(data[hover.index])}</span></div>}</div><div className="chart-axis">{labels.filter((_, i) => i % Math.max(1, Math.ceil(labels.length / 5)) === 0 || i === labels.length - 1).map((x, i) => <span key={`${x}-${i}`}>{x}</span>)}</div></article>;
 }
 
 function AttributionChart({ title, items, color }: { title: string; items: Array<{ label: string; value: number }>; color: string[] }) {
@@ -143,6 +167,7 @@ export function Dashboard() {
   const [newName, setNewName] = useState(""); const [email, setEmail] = useState(""); const [memberRole, setMemberRole] = useState("Viewer"); const [workspaceName, setWorkspaceName] = useState(""); const [workspaceAvatar, setWorkspaceAvatar] = useState("");
   const [sheetUrls, setSheetUrls] = useState<Record<number, string>>({ 1: sheetUrlDefault }); const [sheetUrl, setSheetUrl] = useState(sheetUrlDefault);
   const [sheetData, setSheetData] = useState<SheetMetrics | null>(null); const [sheetStatus, setSheetStatus] = useState<"idle" | "loading" | "connected" | "error">("idle");
+  const [agencySources, setAgencySources] = useState<AgencySource[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [metaInsights, setMetaInsights] = useState<MetaInsight[]>([]); const [metaConnected, setMetaConnected] = useState(false); const [metaStatus, setMetaStatus] = useState<"idle" | "loading" | "error">("idle");
   const [metaAccount, setMetaAccount] = useState("");
@@ -150,10 +175,7 @@ export function Dashboard() {
   const [payouts, setPayouts] = useState<Payout[]>([]); const [payoutMember, setPayoutMember] = useState(""); const [payoutDate, setPayoutDate] = useState(new Date().toISOString().slice(0, 10)); const [payoutMethod, setPayoutMethod] = useState("ACH"); const [payoutAmount, setPayoutAmount] = useState("");
   const client = clients.find((c) => c.id === clientId) ?? clients[0];
 
-  async function loadSheet(url = sheetUrls[clientId], force = false) {
-    if (!url) { setSheetData(null); setSheetStatus("idle"); return null; }
-    setSheetStatus("loading");
-    try {
+  async function fetchSheetMetrics(url: string, workspaceId: number, force = false): Promise<SheetMetrics> {
       const id = sheetIdFromUrl(url);
       const getSheet = async (sheet: string) => { const response = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(id)}&sheet=${encodeURIComponent(sheet)}${force ? `&refresh=${Date.now()}` : ""}`, { cache: "no-store" }); if (!response.ok) throw new Error(); return parseCsv(await response.text()); };
       const [overview, closed, crm, events, payoutRows, bookedCalls] = await Promise.all([getSheet("System Overview"), getSheet("Closed Deals"), getSheet("Sales CRM"), getSheet("Events"), getSheet("Payouts"), getSheet("Booked Calls")]);
@@ -165,7 +187,7 @@ export function Dashboard() {
       const { deals: dealRows, duplicateCount } = uniqueDealRows(header >= 0 ? closed.slice(header + 1) : []);
       const payoutHeader = payoutRows.findIndex((row) => row[0]?.trim() === "Payee"); const payoutData = payoutHeader >= 0 ? payoutRows.slice(payoutHeader + 1).filter((row) => row[0]?.trim()) : [];
       const bookingHeader = bookedCalls.findIndex((row) => row[0]?.trim() === "timestamp"); const bookingData = bookingHeader >= 0 ? bookedCalls.slice(bookingHeader + 1).filter((row) => row[0]?.trim()) : [];
-      setSheetData({
+      return {
         booked: numeric(totals[0]), taken: numeric(totals[1]), showRate: numeric(totals[3]),
         setters: toPeople(section("Setter Name", ["Closer Name"]), "Setter"),
         closers: toPeople(section("Closer Name", ["Other %", "Operator"]), "Closer"),
@@ -173,22 +195,45 @@ export function Dashboard() {
         deals: dealRows.map((row) => ({ lead: row[0], phone: row[1], email: row[2], setter: row[3], closer: row[4], method: row[5], cash: numeric(row[6]), offer: numeric(row[7]), owed: numeric(row[8]), date: row[9], next: row[10], end: row[11], source: row[12] || "Unattributed", medium: row[13] || "", campaign: row[14] || "", video: row[15] || "" })),
         meetings: crm.slice(1).filter((row) => row[0]?.trim() && parseSheetDate(row[6])).map((row) => ({ lead: row[0], email: row[2] || "", date: row[6], status: row[3] || "", setter: row[4] || "", closer: row[5] || "", taken: !!row[3] && !/no show|rescheduled|booked/i.test(row[3]) })),
         bookings: bookingData.map((row) => ({ name: row[1] || "", email: row[2] || "", date: row[8] || row[0], source: row[10] || "", medium: row[11] || "", campaign: row[12] || "", video: (() => { try { return JSON.parse(row[14] || "{}").attribution?.video_id || row[12] || ""; } catch { return row[12] || ""; } })(), leadSource: row[15] || "" })),
-        sheetPayouts: payoutData.map((row, index) => ({ id: numeric(row[5]) || 900000000 + index, workspaceId: clientId, member: row[4] ? `${row[4]}:${row[0]}` : row[0], date: row[1] || "", method: row[2] || "", amount: numeric(row[3]) })),
+        sheetPayouts: payoutData.map((row, index) => ({ id: numeric(row[5]) || workspaceId * 1000000 + 900000 + index, workspaceId, member: row[4] ? `${row[4]}:${row[0]}` : row[0], date: row[1] || "", method: row[2] || "", amount: numeric(row[3]) })),
         applicationDates: events.filter((row) => row[1]?.trim() === "application_submitted" && parseSheetDate(row[0])).map((row) => row[0]),
         duplicateDealsRemoved: duplicateCount,
         updatedAt: new Date(),
+      };
+  }
+
+  async function loadSheet(url = sheetUrls[clientId], force = false) {
+    setSheetStatus("loading");
+    if (clientId === agencyClient.id) {
+      const connectedOffers = clients.filter((item) => item.id !== agencyClient.id).flatMap((item) => {
+        const itemUrl = sheetUrls[item.id] || (item.id === 1 ? sheetUrlDefault : "");
+        return itemUrl ? [{ client: item, url: itemUrl }] : [];
       });
+      if (!connectedOffers.length) { setAgencySources([]); setSheetData(null); setSheetStatus("idle"); return null; }
+      const results = await Promise.allSettled(connectedOffers.map(async ({ client, url: itemUrl }) => ({ client, data: await fetchSheetMetrics(itemUrl, client.id, force) })));
+      const sources = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      setAgencySources(sources);
+      if (!sources.length) { setSheetData(null); setSheetStatus("error"); return null; }
+      const combined = combineAgencyMetrics(sources);
+      setSheetData(combined); setSheetStatus("connected");
+      return { dealCount: combined.deals.length, duplicateCount: combined.duplicateDealsRemoved };
+    }
+    if (!url) { setAgencySources([]); setSheetData(null); setSheetStatus("idle"); return null; }
+    try {
+      const metrics = await fetchSheetMetrics(url, clientId, force);
+      setAgencySources([]); setSheetData(metrics);
       setSheetStatus("connected");
-      return { dealCount: dealRows.length, duplicateCount };
-    } catch { setSheetStatus("error"); setSheetData(null); return null; }
+      return { dealCount: metrics.deals.length, duplicateCount: metrics.duplicateDealsRemoved };
+    } catch { setAgencySources([]); setSheetStatus("error"); setSheetData(null); return null; }
   }
 
   async function loadWorkspace() {
+    if (clientId === agencyClient.id) { setPayouts([]); return; }
     try {
       const response = await fetch(`/api/workspaces?workspaceId=${clientId}`); if (!response.ok) return;
       const data = await response.json() as { workspace?: { name?: string; avatar?: string; industry?: string; initials?: string; color?: string; sheetUrl?: string }; payouts?: Payout[] };
       if (data.workspace?.name) {
-        setClients((items) => items.map((item) => item.id === clientId ? { ...item, name: data.workspace!.name!, initials: data.workspace!.initials || initials(data.workspace!.name!), avatar: data.workspace!.avatar || "", industry: data.workspace!.industry || item.industry, color: data.workspace!.color || item.color } : item));
+        setClients((items) => items.map((item) => item.id === clientId ? { ...item, name: data.workspace!.name!, initials: data.workspace!.initials || initials(data.workspace!.name!), avatar: data.workspace!.avatar || item.avatar || (item.id === 1 ? sellerSyndicateLogo : ""), industry: data.workspace!.industry || item.industry, color: data.workspace!.color || item.color } : item));
         if (data.workspace.sheetUrl) setSheetUrls((items) => ({ ...items, [clientId]: data.workspace!.sheetUrl! }));
       }
       setPayouts(data.payouts ?? []);
@@ -200,10 +245,10 @@ export function Dashboard() {
       const response = await fetch("/api/workspaces?all=true"); if (!response.ok) return;
       const data = await response.json() as { workspaces?: Array<Client & { sheetUrl?: string }> };
       if (data.workspaces?.length) {
-        const normalized = data.workspaces.map((item) => ({ ...item, id: Number(item.id), initials: item.initials || initials(item.name), color: item.color || "#7646ff" }));
+        const normalized = data.workspaces.map((item) => ({ ...item, id: Number(item.id), initials: item.initials || initials(item.name), color: item.color || "#7646ff", avatar: item.avatar || (Number(item.id) === 1 ? sellerSyndicateLogo : "") }));
         const savedSheetUrls = Object.fromEntries(data.workspaces.filter((item) => item.sheetUrl).map((item) => [Number(item.id), item.sheetUrl!] as const));
-        setClients(normalized); setSheetUrls((current) => ({ ...current, ...savedSheetUrls }));
-        if (!normalized.some((item) => item.id === clientId)) setClientId(normalized[0].id);
+        setClients([agencyClient, ...normalized]); setSheetUrls((current) => ({ ...current, ...savedSheetUrls }));
+        if (clientId !== agencyClient.id && !normalized.some((item) => item.id === clientId)) setClientId(normalized[0].id);
       }
     } catch {}
   }
@@ -241,11 +286,23 @@ export function Dashboard() {
 
   async function loadMeta() {
     const { start, end } = selectedBounds(); setMetaStatus("loading");
-    try { const response = await fetch(`/api/meta?workspaceId=${clientId}&since=${start.toISOString().slice(0, 10)}&until=${end.toISOString().slice(0, 10)}`, { cache: "no-store" }); const data = await response.json() as { connected?: boolean; adAccountId?: string; insights?: MetaInsight[] }; setMetaConnected(!!data.connected); setMetaAccount(data.adAccountId ?? ""); setMetaInsights(data.insights ?? []); setMetaStatus(response.ok ? "idle" : "error"); } catch { setMetaStatus("error"); setMetaInsights([]); }
+    try {
+      const workspaceIds = clientId === agencyClient.id ? clients.filter((item) => item.id !== agencyClient.id).map((item) => item.id) : [clientId];
+      const results = await Promise.all(workspaceIds.map(async (workspaceId) => {
+        const response = await fetch(`/api/meta?workspaceId=${workspaceId}&since=${start.toISOString().slice(0, 10)}&until=${end.toISOString().slice(0, 10)}`, { cache: "no-store" });
+        const data = await response.json() as { connected?: boolean; adAccountId?: string; insights?: MetaInsight[] };
+        return { ok: response.ok, ...data };
+      }));
+      const connected = results.filter((result) => result.connected);
+      setMetaConnected(connected.length > 0); setMetaAccount(clientId === agencyClient.id ? `${connected.length} ad account${connected.length === 1 ? "" : "s"}` : connected[0]?.adAccountId ?? "");
+      setMetaInsights(connected.flatMap((result) => result.insights ?? [])); setMetaStatus(results.every((result) => result.ok) ? "idle" : "error");
+    } catch { setMetaStatus("error"); setMetaInsights([]); }
   }
 
   function connectMeta(e: React.FormEvent) {
-    e.preventDefault(); setMetaStatus("loading"); window.location.assign(`/api/meta/oauth/start?workspaceId=${clientId}`);
+    e.preventDefault();
+    if (clientId === agencyClient.id) { setModal(null); notify("Select an offer before connecting its Meta ad account"); return; }
+    setMetaStatus("loading"); window.location.assign(`/api/meta/oauth/start?workspaceId=${clientId}`);
   }
 
   async function loadSupport() {
@@ -280,7 +337,21 @@ export function Dashboard() {
     return { dated, meetings, cashSeries, revenueSeries, labels, ...current, previous, allTime, cashAttribution: attribution("cash"), revenueAttribution: attribution("offer"), missing: (sheetData?.deals ?? []).filter((deal) => !parseSheetDate(deal.date)).length };
   }, [sheetData, range, customStart, customEnd]);
 
-  const closerRows = useMemo(() => (sheetData?.closers.length ? sheetData.closers : fallbackPeople).sort((a, b) => b.cash - a.cash), [sheetData]);
+  const agencyOfferRows = useMemo(() => {
+    if (clientId !== agencyClient.id) return [];
+    const end = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay();
+    const start = range === "Custom" ? new Date(`${customStart}T00:00:00`) : rangeStart(range, end);
+    const inRange = (value: string) => { const date = parseSheetDate(value); return !!date && (range === "All time" || (date >= start && date <= end)); };
+    return clients.filter((item) => item.id !== agencyClient.id).map((item) => {
+      const data = agencySources.find((source) => source.client.id === item.id)?.data;
+      const deals = (data?.deals ?? []).filter((deal) => inRange(deal.date));
+      const meetings = (data?.meetings ?? []).filter((meeting) => inRange(meeting.date));
+      const taken = meetings.filter((meeting) => meeting.taken).length;
+      return { client: item, connected: !!data, cash: deals.reduce((sum, deal) => sum + deal.cash, 0), revenue: deals.reduce((sum, deal) => sum + deal.offer, 0), closed: deals.length, showRate: meetings.length ? taken / meetings.length * 100 : 0 };
+    }).sort((a, b) => b.cash - a.cash);
+  }, [agencySources, clientId, clients, range, customEnd, customStart]);
+
+  const closerRows = useMemo(() => [...(sheetData?.closers ?? [])].sort((a, b) => b.cash - a.cash), [sheetData]);
   const setters = useMemo(() => [...(sheetData?.setters ?? [])].sort((a, b) => b.cash - a.cash), [sheetData]);
   const payoutHistory = useMemo(() => sheetData?.sheetPayouts.length ? sheetData.sheetPayouts : payouts, [sheetData, payouts]);
   const payoutPeople = useMemo(() => {
@@ -319,7 +390,7 @@ export function Dashboard() {
   async function invite(e: React.FormEvent) { e.preventDefault(); if (!email.includes("@")) return; const requestedEmail = email; const response = await fetch("/api/support", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: clientId, workspaceName: client.name, message: `${memberRole} workspace access requested for ${requestedEmail}. Please add this user's ChatGPT account to the ${client.name} subaccount.` }) }); if (!response.ok) { notify("Access request could not be sent"); return; } setModal(null); setEmail(""); void loadSupport(); notify(`Access request sent for ${requestedEmail}`); }
   async function connectSheet(e: React.FormEvent) { e.preventDefault(); const response = await fetch("/api/workspaces", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: clientId, ...client, sheetUrl }) }); if (!response.ok) { notify("Workspace database is not connected"); return; } setSheetUrls((items) => ({ ...items, [clientId]: sheetUrl })); setModal(null); void loadSheet(sheetUrl); notify("Google Sheet connected for every preview"); }
   async function saveSettings(e: React.FormEvent) { e.preventDefault(); const name = workspaceName.trim() || client.name; const updated = { ...client, name, initials: initials(name), avatar: workspaceAvatar.trim() }; const response = await fetch("/api/workspaces", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspaceId: clientId, ...updated, sheetUrl: sheetUrls[clientId] || "" }) }); if (!response.ok) { notify("Workspace database is not connected"); return; } setClients((items) => items.map((item) => item.id === clientId ? updated : item)); setModal(null); notify("Workspace updated for every preview"); }
-  async function deleteWorkspace() { if (clients.length === 1) { notify("Create another workspace before deleting this one"); return; } if (!window.confirm(`Delete ${client.name}? This removes its saved payouts and settings.`)) return; const response = await fetch(`/api/workspaces?workspaceId=${clientId}`, { method: "DELETE" }); if (!response.ok) { notify("Workspace could not be deleted"); return; } const next = clients.find((x) => x.id !== clientId)!; setClients((items) => items.filter((x) => x.id !== clientId)); setClientId(next.id); setModal(null); notify("Workspace deleted from every preview"); }
+  async function deleteWorkspace() { const workspaces = clients.filter((item) => item.id !== agencyClient.id); if (workspaces.length === 1) { notify("Create another workspace before deleting this one"); return; } if (!window.confirm(`Delete ${client.name}? This removes its saved payouts and settings.`)) return; const response = await fetch(`/api/workspaces?workspaceId=${clientId}`, { method: "DELETE" }); if (!response.ok) { notify("Workspace could not be deleted"); return; } const next = workspaces.find((x) => x.id !== clientId)!; setClients((items) => items.filter((x) => x.id !== clientId)); setClientId(next.id); setModal(null); notify("Workspace deleted from every preview"); }
   async function addPayout(e: React.FormEvent) { e.preventDefault(); const amount = numeric(payoutAmount); if (!payoutMember || amount <= 0) return; const optimistic: Payout = { id: Date.now(), workspaceId: clientId, member: payoutMember, date: payoutDate, method: payoutMethod, amount }; setPayouts((items) => [optimistic, ...items]); setModal(null); setPayoutAmount(""); try { const response = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(optimistic) }); const result = await response.json() as { sheetSynced?: boolean }; notify(result.sheetSynced ? "Payout recorded and synced to Google Sheets" : "Payout recorded; Google Sheets sync needs connection"); if (response.ok) { void loadWorkspace(); window.setTimeout(() => void loadSheet(sheetUrls[clientId], true), 900); } } catch { notify("Payout recorded locally; sheet sync unavailable"); } }
   async function deletePayout(payout: Payout) {
     if (!window.confirm(`Delete the ${money(payout.amount)} payout for ${payout.member.split(":").at(-1)}?`)) return;
@@ -329,23 +400,23 @@ export function Dashboard() {
     const result = await response.json() as { sheetSynced?: boolean };
     notify(result.sheetSynced ? "Payout deleted from MoonRift and Google Sheets" : "Payout deleted; Google Sheets sync needs connection");
   }
-  function openSettings() { setWorkspaceName(client.name); setWorkspaceAvatar(client.avatar ?? ""); setModal("settings"); }
+  function openSettings() { if (clientId === agencyClient.id) { notify("Select an offer to edit its workspace settings"); return; } setWorkspaceName(client.name); setWorkspaceAvatar(client.avatar ?? ""); setModal("settings"); }
   function selectNav(item: string) { setActiveNav(item); setSidebarOpen(false); if (item === "Dashboard") setTab("Overview"); if (item === "Payouts") setTab("Payouts"); if (item === "Media KPIs") setTab("Media KPIs"); if (item === "Sales") setTab("Closed Deals"); if (item === "Team members") setTab("Users"); if (item === "Agency inbox") { setTab("Agency Inbox"); void loadSupport(); } if (item === "Settings") openSettings(); if (item === "Data sources") setTab("Data Sources"); }
 
   return <main className="app-shell">
     <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
       <div className="brand"><span className="brand-mark"><img src="/moonrift-logo.png" alt="" /></span><span>MoonRift</span></div><div className="workspace-label">WORKSPACE</div>
       <button className="client-select" onClick={() => setClientMenu(!clientMenu)}><span className="client-avatar" style={{ background: client.color }}>{client.avatar ? <img src={client.avatar} alt="" /> : client.initials}</span><span><strong>{client.name}</strong><small>{client.industry}</small></span><em>⌄</em></button>
-      {clientMenu && <div className="client-popover">{clients.map((c) => <button key={c.id} onClick={() => { setClientId(c.id); setClientMenu(false); }}><span style={{ background: c.color }}>{c.avatar ? <img src={c.avatar} alt="" /> : c.initials}</span><b>{c.name}</b>{c.id === clientId && "✓"}</button>)}<button className="new-client" onClick={() => { setModal("client"); setClientMenu(false); }}>＋ New workspace</button></div>}
-      <nav>{[["Dashboard", "◈"], ["Sales", "▤"], ["Payouts", "◇"], ["Media KPIs", "◉"]].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}<div className="nav-line" />{[["Team members", "♙"], ["Data sources", "⌁"], ...(isAgencyAdmin ? [["Agency inbox", "✉"]] : []), ["Settings", "⚙"]].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}</nav>
+      {clientMenu && <div className="client-popover">{clients.filter((c) => c.id !== agencyClient.id || isAgencyAdmin).map((c) => <button key={c.id} onClick={() => { setClientId(c.id); setClientMenu(false); if (c.id === agencyClient.id) { setActiveNav("Dashboard"); setTab("Overview"); } }}><span style={{ background: c.color }}>{c.avatar ? <img src={c.avatar} alt="" /> : c.initials}</span><b>{c.name}</b>{c.id === clientId && "✓"}</button>)}<button className="new-client" onClick={() => { setModal("client"); setClientMenu(false); }}>＋ New workspace</button></div>}
+      <nav>{[["Dashboard", "◈"], ["Sales", "▤"], ["Payouts", "◇"], ["Media KPIs", "◉"]].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}<div className="nav-line" />{[["Team members", "♙"], ["Data sources", "⌁"], ...(isAgencyAdmin ? [["Agency inbox", "✉"]] : []), ...(clientId === agencyClient.id ? [] : [["Settings", "⚙"]])].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}</nav>
       <div className="sidebar-bottom"><button className="help" onClick={() => setModal("support")}><span>?</span><div><strong>Need help?</strong><small>Message MoonRift Media</small></div></button><div className="profile"><span>PP</span><div><strong>Peter Phan</strong><small>{isAgencyAdmin ? "MoonRift agency admin" : "Workspace user"}</small></div></div></div>
     </aside>
     {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
-    <section className="content"><header className="topbar"><button className="menu-btn" onClick={() => setSidebarOpen(true)}>☰</button><div className="crumb"><span>Dashboards</span><b>/</b><strong>{tab}</strong></div><div className="top-actions"><button className="invite-btn" onClick={() => setModal("member")}>＋ Invite member</button></div></header>
-      <div className="dashboard"><div className="page-title"><div><h1>{client.name} <span>{tab}</span></h1></div><div className="title-actions"><button onClick={() => void refreshDashboard()} disabled={refreshing}>{refreshing ? "…" : "↻"} <span>{refreshing ? "Refreshing" : "Refresh data"}</span></button><button onClick={() => setActionMenu(!actionMenu)}>⋯</button>{actionMenu && <div className="action-menu"><button onClick={openSettings}>Workspace settings</button><button onClick={() => setModal("sheet")}>Manage data source</button></div>}</div></div>
-        {["Overview", "Closed Deals", "Payouts", "Media KPIs"].includes(tab) && <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className="refresh-data" onClick={() => void refreshDashboard()} disabled={refreshing} aria-label="Refresh Google Sheets data">{refreshing ? "Refreshing…" : "↻ Refresh data"}</button><button className={`sheet-pill ${sheetStatus}`} onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : sheetStatus === "connected" ? `Google Sheets live${sheetData ? ` · ${sheetData.updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` : sheetStatus === "error" ? "Sheet error" : "Connect sheet"}</button></div>}
+    <section className="content"><header className="topbar"><button className="menu-btn" onClick={() => setSidebarOpen(true)}>☰</button><div className="crumb"><span>Dashboards</span><b>/</b><strong>{tab}</strong></div><div className="top-actions">{clientId !== agencyClient.id && <button className="invite-btn" onClick={() => setModal("member")}>＋ Invite member</button>}</div></header>
+      <div className="dashboard"><div className="page-title"><div><h1>{client.name} <span>{tab}</span></h1></div><div className="title-actions"><button onClick={() => void refreshDashboard()} disabled={refreshing}>{refreshing ? "…" : "↻"} <span>{refreshing ? "Refreshing" : "Refresh data"}</span></button>{clientId !== agencyClient.id && <><button onClick={() => setActionMenu(!actionMenu)}>⋯</button>{actionMenu && <div className="action-menu"><button onClick={openSettings}>Workspace settings</button><button onClick={() => setModal("sheet")}>Manage data source</button></div>}</>}</div></div>
+        {["Overview", "Closed Deals", "Payouts", "Media KPIs"].includes(tab) && <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className="refresh-data" onClick={() => void refreshDashboard()} disabled={refreshing} aria-label="Refresh Google Sheets data">{refreshing ? "Refreshing…" : "↻ Refresh data"}</button><button className={`sheet-pill ${sheetStatus}`} disabled={clientId === agencyClient.id} onClick={() => { if (clientId === agencyClient.id) return; setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : clientId === agencyClient.id && sheetStatus === "connected" ? `${agencySources.length} offer${agencySources.length === 1 ? "" : "s"} live` : sheetStatus === "connected" ? `Google Sheets live${sheetData ? ` · ${sheetData.updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` : sheetStatus === "error" ? "Sheet error" : clientId === agencyClient.id ? "No connected offers" : "Connect sheet"}</button></div>}
 
-        {tab === "Overview" && <><div className="charts"><Chart data={period.cashSeries} labels={period.labels} color="#8b6cff" fill="rgba(139,108,255,.28)" label="Cash collected by payment date" total={money(period.cash)} /><Chart data={period.revenueSeries} labels={period.labels} color="#38d6b6" fill="rgba(56,214,182,.22)" label="Revenue generated by payment date" total={money(period.revenue)} /></div>
+        {tab === "Overview" && <>{clientId === agencyClient.id && <section className="agency-overview"><div className="agency-overview-head"><div><span>AGENCY PERFORMANCE</span><h2>Every offer in one clear view</h2></div><strong>{agencyOfferRows.filter((row) => row.connected).length} of {agencyOfferRows.length} connected</strong></div><div className="agency-offer-grid">{agencyOfferRows.map((row) => <button key={row.client.id} onClick={() => { setClientId(row.client.id); setActiveNav("Dashboard"); setTab("Overview"); }}><span className="agency-offer-avatar" style={{ background: row.client.color }}>{row.client.avatar ? <img src={row.client.avatar} alt="" /> : row.client.initials}</span><div><h3>{row.client.name}</h3><small>{row.connected ? `${range} performance` : "Connect a Google Sheet"}</small></div><dl><div><dt>Cash</dt><dd>{money(row.cash)}</dd></div><div><dt>Revenue</dt><dd>{money(row.revenue)}</dd></div><div><dt>Closed</dt><dd>{row.closed}</dd></div><div><dt>Show rate</dt><dd>{row.showRate.toFixed(1)}%</dd></div></dl><em>View offer →</em></button>)}</div></section>}<div className="charts"><Chart data={period.cashSeries} labels={period.labels} color="#8b6cff" fill="rgba(139,108,255,.28)" label="Cash collected by payment date" total={money(period.cash)} /><Chart data={period.revenueSeries} labels={period.labels} color="#38d6b6" fill="rgba(56,214,182,.22)" label="Revenue generated by payment date" total={money(period.revenue)} /></div>
           {period.missing > 0 && <div className="data-warning">ⓘ {period.missing} closed {period.missing === 1 ? "deal is" : "deals are"} missing a Date Closed and excluded from date-range totals and charts.</div>}
           <div className="kpi-grid">{[
             ["Cash collected", money(period.cash), period.cash, period.previous.cash],
@@ -367,9 +438,9 @@ export function Dashboard() {
 
         {tab === "Closed Deals" && <article className="table-card deals-card"><div className="section-head"><div><h2>Closed Deals</h2><p>Live from the Closed Deals tab in Google Sheets · {range}</p></div><strong>{period.dated.length} deals</strong></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Setter</th><th>Closer</th><th>Source</th><th>Specific ad / video</th><th>Paid through</th><th>Cash collected</th><th>Offer amount</th><th>Amount owed</th><th>Date closed</th><th>Next payment</th></tr></thead><tbody>{period.dated.map(({ deal }) => <tr key={`${deal.lead}-${deal.phone}`}><td><div><b>{deal.lead}</b><small>{deal.email || deal.phone}</small></div></td><td>{deal.setter}</td><td>{deal.closer}</td><td>{deal.source}</td><td>{deal.video || deal.campaign || "—"}</td><td>{deal.method}</td><td>{money(deal.cash)}</td><td>{money(deal.offer)}</td><td>{money(deal.owed)}</td><td>{deal.date || <span className="missing-date">Missing date</span>}</td><td>{deal.next || "—"}</td></tr>)}</tbody></table></div></article>}
 
-        {tab === "Payouts" && <><div className="payout-head"><div><h2>Team, operator & ownership payouts</h2><p>Paid history is read directly from the Google Sheets Payouts tab.</p></div><button onClick={() => { setPayoutMember(payoutPeople[0]?.key ?? ""); setModal("payout"); }}>＋ Add payout</button></div><div className="payout-grid">{payoutPeople.map((p) => { const inRange = filteredPayouts.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const allPaid = payoutHistory.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const earned = earnedForPayee(p.name, p.roles); return <article className="payout-card" key={p.key}><div><span className="person p0">{initials(p.name)}</span><h3>{p.name}<small>{p.roles.join(" · ")}</small></h3></div><dl><div><dt>Earned in selected range</dt><dd>{money(earned)}</dd></div><div><dt>Paid in selected range</dt><dd>{money(inRange)}</dd></div><div><dt>Paid out (all time)</dt><dd>{money(allPaid)}</dd></div><div><dt>Remaining for range</dt><dd>{money(Math.max(0, earned - inRange))}</dd></div></dl></article>; })}</div><article className="table-card"><div className="section-head"><div><h2>Payout history</h2><p>{range} · {filteredPayouts.length} records from Google Sheets</p></div></div><div className="table-wrap"><table><thead><tr><th>Payee</th><th>Role</th><th>Day</th><th>Method</th><th>Amount</th><th></th></tr></thead><tbody>{filteredPayouts.map((p) => <tr key={p.id}><td><b>{p.member.split(":").at(-1)}</b></td><td>{p.member.includes(":") ? p.member.split(":")[0] : "Unassigned"}</td><td>{p.date || "No date"}</td><td>{p.method || "—"}</td><td>{money(p.amount)}</td><td><button className="delete-payout" onClick={() => void deletePayout(p)} aria-label={`Delete payout for ${p.member}`}>Delete</button></td></tr>)}{!filteredPayouts.length && <tr><td colSpan={6}>No payouts in this date range.</td></tr>}</tbody></table></div></article></>}
+        {tab === "Payouts" && <><div className="payout-head"><div><h2>Team, operator & ownership payouts</h2><p>Paid history is read directly from the Google Sheets Payouts tab.</p></div>{clientId !== agencyClient.id && <button onClick={() => { setPayoutMember(payoutPeople[0]?.key ?? ""); setModal("payout"); }}>＋ Add payout</button>}</div><div className="payout-grid">{payoutPeople.map((p) => { const inRange = filteredPayouts.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const allPaid = payoutHistory.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const earned = earnedForPayee(p.name, p.roles); return <article className="payout-card" key={p.key}><div><span className="person p0">{initials(p.name)}</span><h3>{p.name}<small>{p.roles.join(" · ")}</small></h3></div><dl><div><dt>Earned in selected range</dt><dd>{money(earned)}</dd></div><div><dt>Paid in selected range</dt><dd>{money(inRange)}</dd></div><div><dt>Paid out (all time)</dt><dd>{money(allPaid)}</dd></div><div><dt>Remaining for range</dt><dd>{money(Math.max(0, earned - inRange))}</dd></div></dl></article>; })}</div><article className="table-card"><div className="section-head"><div><h2>Payout history</h2><p>{range} · {filteredPayouts.length} records from Google Sheets</p></div></div><div className="table-wrap"><table><thead><tr><th>Payee</th><th>Role</th><th>Day</th><th>Method</th><th>Amount</th><th></th></tr></thead><tbody>{filteredPayouts.map((p) => <tr key={`${p.workspaceId}-${p.id}`}><td><b>{p.member.split(":").at(-1)}</b></td><td>{p.member.includes(":") ? p.member.split(":")[0] : "Unassigned"}</td><td>{p.date || "No date"}</td><td>{p.method || "—"}</td><td>{money(p.amount)}</td><td>{clientId !== agencyClient.id && <button className="delete-payout" onClick={() => void deletePayout(p)} aria-label={`Delete payout for ${p.member}`}>Delete</button>}</td></tr>)}{!filteredPayouts.length && <tr><td colSpan={6}>No payouts in this date range.</td></tr>}</tbody></table></div></article></>}
         {tab === "Media KPIs" && <><div className="metrics-section media-summary"><div className="metrics-title"><div><span>MEDIA KPIs</span><h2>Specific ad and video performance</h2></div>{!metaConnected && <button onClick={() => setModal("meta")}>Connect Meta Ads for spend</button>}</div><div className="paid-grid"><article><span>Appointments</span><strong>{mediaRows.reduce((sum, row) => sum + row.appointments, 0)}</strong></article><article><span>Meetings taken</span><strong>{mediaRows.reduce((sum, row) => sum + row.meetings, 0)}</strong></article><article><span>Closed deals</span><strong>{mediaRows.reduce((sum, row) => sum + row.closes, 0)}</strong></article><article><span>Ad spend</span><strong>{metaConnected ? money(adSpend) : "—"}</strong></article></div></div><article className="table-card"><div className="section-head"><div><h2>Creative performance</h2><p>Bookings from Booked Calls; revenue and cash from Closed Deals attribution.</p></div></div><div className="table-wrap"><table><thead><tr><th>Specific ad / video</th><th>Source</th><th>Appointments</th><th>Meetings</th><th>Closes</th><th>Close rate</th><th>Cash collected</th><th>Revenue</th><th>Spend</th><th>CRM ROAS</th></tr></thead><tbody>{mediaRows.map((row) => <tr key={row.label}><td><b>{row.label}</b></td><td>{row.source || "—"}</td><td>{row.appointments}</td><td>{row.meetings}</td><td>{row.closes}</td><td><span className="rate">{row.meetings ? (row.closes / row.meetings * 100).toFixed(1) : 0}%</span></td><td>{money(row.cash)}</td><td>{money(row.revenue)}</td><td>{metaConnected ? money(row.spend) : "—"}</td><td>{row.spend ? `${(row.revenue / row.spend).toFixed(2)}×` : "—"}</td></tr>)}{!mediaRows.length && <tr><td colSpan={10}>No attributed media activity in this range.</td></tr>}</tbody></table></div></article></>}
-        {tab === "Data Sources" && <div className="source-grid"><article><span className={`source-icon ${sheetStatus}`}>▦</span><div><h2>Google Sheets</h2><p>Sales CRM, Closed Deals, Payouts, Booked Calls, applications, and attribution.</p><small>{sheetStatus === "connected" ? "Connected and syncing" : "Not connected"}</small></div><button onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}>{sheetStatus === "connected" ? "Manage" : "Connect"}</button></article><article><span className={`source-icon ${metaConnected ? "connected" : ""}`}>f</span><div><h2>Meta Ads</h2><p>Daily spend, ad names, clicks, and impressions for CRM-calculated ROAS.</p><small>{metaConnected ? `Connected${metaAccount ? ` · ${metaAccount}` : ""}` : "Not connected"}</small></div><button onClick={() => setModal("meta")}>{metaConnected ? "Reconnect" : "Connect"}</button></article></div>}
+        {tab === "Data Sources" && <div className="source-grid"><article><span className={`source-icon ${sheetStatus}`}>▦</span><div><h2>Google Sheets</h2><p>Sales CRM, Closed Deals, Payouts, Booked Calls, applications, and attribution.</p><small>{clientId === agencyClient.id ? `${agencySources.length} connected offer${agencySources.length === 1 ? "" : "s"}` : sheetStatus === "connected" ? "Connected and syncing" : "Not connected"}</small></div><button onClick={() => { if (clientId === agencyClient.id) { notify("Select an offer to manage its Google Sheet"); return; } setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}>{clientId === agencyClient.id ? "Select offer" : sheetStatus === "connected" ? "Manage" : "Connect"}</button></article><article><span className={`source-icon ${metaConnected ? "connected" : ""}`}>f</span><div><h2>Meta Ads</h2><p>Daily spend, ad names, clicks, and impressions for CRM-calculated ROAS.</p><small>{metaConnected ? `Connected${metaAccount ? ` · ${metaAccount}` : ""}` : "Not connected"}</small></div><button onClick={() => { if (clientId === agencyClient.id) { notify("Select an offer to manage its Meta ad account"); return; } setModal("meta"); }}>{clientId === agencyClient.id ? "Select offer" : metaConnected ? "Reconnect" : "Connect"}</button></article></div>}
         {tab === "Users" && <article className="users-panel"><div><span>♙</span><h2>Subaccount access</h2><p>Each user signs in with their own ChatGPT account. Workspace access and account switching remain isolated by the agency access list—there are no shared dashboard passwords.</p></div><button onClick={() => setModal("member")}>＋ Invite workspace user</button><div className="user-row"><span>PP</span><div><b>Peter Phan</b><small>peterphan441@gmail.com</small></div><em>Agency owner</em></div><div className="access-note">Workspace deletion is still available under <strong>Settings → Delete workspace</strong>. The workspace switcher in the upper-left is the agency subaccount view.</div></article>}
         {tab === "Agency Inbox" && isAgencyAdmin && <article className="table-card"><div className="section-head"><div><h2>Agency help inbox</h2><p>Support messages from MoonRift subaccounts</p></div><strong>{supportMessages.filter((m) => m.status === "open").length} open</strong></div><div className="support-list">{supportMessages.map((message) => <div className={`support-row ${message.status}`} key={message.id}><div><b>{message.workspaceName}</b><small>{message.senderEmail} · {new Date(message.createdAt).toLocaleString()}</small><p>{message.message}</p></div>{message.status === "open" ? <button onClick={() => void resolveSupport(message.id)}>Mark resolved</button> : <span>Resolved</span>}</div>)}{!supportMessages.length && <div className="empty-support">No help requests yet.</div>}</div></article>}
       </div>
@@ -382,7 +453,7 @@ export function Dashboard() {
       {modal === "sheet" && <><label>Google Sheets URL</label><input type="url" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} required /><div className="access-note">MoonRift reads <strong>System Overview</strong>, <strong>Sales CRM</strong>, <strong>Closed Deals</strong>, <strong>Payouts</strong>, <strong>Booked Calls</strong>, and application events. Link sharing must allow viewers.</div></>}
       {modal === "meta" && <><p>Sign in with Facebook, approve reporting access, and choose the ad account for this workspace. MoonRift calculates ROAS from your CRM-attributed revenue—not Meta&apos;s purchase value.</p><div className="meta-oauth-permissions"><b>MoonRift will be able to:</b><span>✓ View ad accounts you can access</span><span>✓ Read campaign spend and performance</span><span>✓ Match Meta spend to CRM-attributed revenue</span><small>Read-only connection. MoonRift cannot create, edit, publish, or pause ads.</small></div></>}
       {modal === "support" && <><p>Your message will appear in the MoonRift agency inbox for this workspace.</p><label>How can we help?</label><textarea value={supportText} onChange={(e) => setSupportText(e.target.value)} rows={6} placeholder="Describe the issue or request…" required /></>}
-      {modal === "settings" && <><label>Workspace name</label><input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} required /><label>Profile picture URL</label><input type="url" value={workspaceAvatar} onChange={(e) => setWorkspaceAvatar(e.target.value)} placeholder="https://…" /><div className="avatar-preview">{workspaceAvatar ? <img src={workspaceAvatar} alt="" /> : <span style={{ background: client.color }}>{initials(workspaceName || client.name)}</span>}</div><button type="button" className="danger-button" onClick={deleteWorkspace}>Delete workspace</button></>}
+      {modal === "settings" && <><label>Workspace name</label><input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} required /><label>Profile picture URL</label><input type="text" value={workspaceAvatar} onChange={(e) => setWorkspaceAvatar(e.target.value)} placeholder="https://… or /workspace-logo.png" /><div className="avatar-preview">{workspaceAvatar ? <img src={workspaceAvatar} alt="" /> : <span style={{ background: client.color }}>{initials(workspaceName || client.name)}</span>}</div><button type="button" className="danger-button" onClick={deleteWorkspace}>Delete workspace</button></>}
       {modal === "payout" && <><label>Payee</label><select value={payoutMember} onChange={(e) => setPayoutMember(e.target.value)} required>{payoutPeople.flatMap((p) => p.roles.map((role) => <option key={`${role}:${p.name}`} value={`${role}:${p.name}`}>{p.name} — {role}</option>))}</select><label>Day</label><input type="date" value={payoutDate} onChange={(e) => setPayoutDate(e.target.value)} required /><label>Method</label><select value={payoutMethod} onChange={(e) => setPayoutMethod(e.target.value)}><option>ACH</option><option>Wire</option><option>Zelle</option><option>PayPal</option><option>Venmo</option><option>Cash</option><option>Other</option></select><label>Amount</label><input type="number" min="0.01" step="0.01" value={payoutAmount} onChange={(e) => setPayoutAmount(e.target.value)} required /></>}
       <div className="modal-actions"><button type="button" onClick={() => setModal(null)}>Cancel</button><button type="submit">{modal === "payout" ? "Record payout" : modal === "support" ? "Send message" : modal === "meta" ? "Continue with Facebook" : modal === "settings" ? "Save changes" : modal === "sheet" ? "Connect & sync" : modal === "member" ? "Request access" : "Create workspace"}</button></div>
     </form></div>}
