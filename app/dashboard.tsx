@@ -10,7 +10,7 @@ type Booking = { name: string; email: string; date: string; source: string; medi
 type Payout = { id: number; workspaceId: number; member: string; date: string; method: string; amount: number };
 type MetaInsight = { date_start: string; ad_id?: string; ad_name?: string; campaign_name?: string; spend: string; impressions?: string; clicks?: string };
 type SupportMessage = { id: number; workspaceId: number; workspaceName: string; senderEmail: string; message: string; status: "open" | "resolved"; createdAt: string };
-type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; bookings: Booking[]; sheetPayouts: Payout[]; applicationDates: string[]; updatedAt: Date };
+type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; bookings: Booking[]; sheetPayouts: Payout[]; applicationDates: string[]; duplicateDealsRemoved: number; updatedAt: Date };
 
 const sheetUrlDefault = "https://docs.google.com/spreadsheets/d/1ahyY64u9uYmcEDFi1XAJRFmnZ_gX_6VQHUnWvswkvmg/edit?usp=sharing";
 const clientsSeed: Client[] = [
@@ -25,6 +25,29 @@ const money = (value: number) => new Intl.NumberFormat("en-US", { style: "curren
 const numeric = (value = "") => Number(value.replace(/[$,%\s,]/g, "")) || 0;
 const sheetIdFromUrl = (value: string) => value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1] ?? value.trim();
 const initials = (name: string) => name.split(/\s+/).map((word) => word[0]).join("").slice(0, 2).toUpperCase();
+
+function uniqueDealRows(rows: string[][]) {
+  const seen = new Set<string>();
+  let duplicateCount = 0;
+  const summaryLabels = /^(?:total|totals|grand total|revenue generated|cash collected|contracted amount|setter name|closer name|other %|operator)$/i;
+  const deals = rows.filter((row) => {
+    const lead = row[0]?.trim() ?? "";
+    if (!lead || summaryLabels.test(lead)) return false;
+
+    // Only actual deal rows may contribute to dashboard revenue. Summary rows
+    // have no contact or assigned sales rep and are deliberately excluded.
+    const hasDealIdentity = Boolean(row[1]?.trim() || row[2]?.trim() || row[3]?.trim() || row[4]?.trim());
+    if (!hasDealIdentity) return false;
+
+    const key = [lead, row[1], row[2], row[3], row[4], row[6], row[7], row[8], row[9]]
+      .map((value) => (value ?? "").trim().toLowerCase())
+      .join("|");
+    if (seen.has(key)) { duplicateCount++; return false; }
+    seen.add(key);
+    return true;
+  });
+  return { deals, duplicateCount };
+}
 
 function parseCsv(text: string) {
   const rows: string[][] = []; let row: string[] = []; let cell = ""; let quoted = false;
@@ -128,7 +151,7 @@ export function Dashboard() {
   const client = clients.find((c) => c.id === clientId) ?? clients[0];
 
   async function loadSheet(url = sheetUrls[clientId], force = false) {
-    if (!url) { setSheetData(null); setSheetStatus("idle"); return; }
+    if (!url) { setSheetData(null); setSheetStatus("idle"); return null; }
     setSheetStatus("loading");
     try {
       const id = sheetIdFromUrl(url);
@@ -138,7 +161,8 @@ export function Dashboard() {
       const section = (name: string, stop: string[]) => { const start = overview.findIndex((row) => row[0]?.trim() === name); if (start < 0) return []; const rows = overview.slice(start + 1); const end = rows.findIndex((row) => stop.includes(row[0]?.trim())); return (end < 0 ? rows : rows.slice(0, end)).filter((row) => row[0]?.trim()); };
       const toPeople = (rows: string[][], role: Person["role"]) => rows.map((row) => ({ name: row[0].trim(), role, calls: numeric(row[1]), closed: numeric(row[2]), revenue: numeric(row[4]), cash: numeric(row[5]), commission: numeric(row[6]), paid: numeric(row[7]) })).sort((a, b) => b.cash - a.cash);
       const otherRows = section("Other %", []);
-      const header = closed.findIndex((row) => row[0]?.trim() === "Lead Name"); const dealRows = header >= 0 ? closed.slice(header + 1).filter((row) => row[0]?.trim()) : [];
+      const header = closed.findIndex((row) => row[0]?.trim() === "Lead Name");
+      const { deals: dealRows, duplicateCount } = uniqueDealRows(header >= 0 ? closed.slice(header + 1) : []);
       const payoutHeader = payoutRows.findIndex((row) => row[0]?.trim() === "Payee"); const payoutData = payoutHeader >= 0 ? payoutRows.slice(payoutHeader + 1).filter((row) => row[0]?.trim()) : [];
       const bookingHeader = bookedCalls.findIndex((row) => row[0]?.trim() === "timestamp"); const bookingData = bookingHeader >= 0 ? bookedCalls.slice(bookingHeader + 1).filter((row) => row[0]?.trim()) : [];
       setSheetData({
@@ -151,10 +175,12 @@ export function Dashboard() {
         bookings: bookingData.map((row) => ({ name: row[1] || "", email: row[2] || "", date: row[8] || row[0], source: row[10] || "", medium: row[11] || "", campaign: row[12] || "", video: (() => { try { return JSON.parse(row[14] || "{}").attribution?.video_id || row[12] || ""; } catch { return row[12] || ""; } })(), leadSource: row[15] || "" })),
         sheetPayouts: payoutData.map((row, index) => ({ id: numeric(row[5]) || 900000000 + index, workspaceId: clientId, member: row[4] ? `${row[4]}:${row[0]}` : row[0], date: row[1] || "", method: row[2] || "", amount: numeric(row[3]) })),
         applicationDates: events.filter((row) => row[1]?.trim() === "application_submitted" && parseSheetDate(row[0])).map((row) => row[0]),
+        duplicateDealsRemoved: duplicateCount,
         updatedAt: new Date(),
       });
       setSheetStatus("connected");
-    } catch { setSheetStatus("error"); setSheetData(null); }
+      return { dealCount: dealRows.length, duplicateCount };
+    } catch { setSheetStatus("error"); setSheetData(null); return null; }
   }
 
   async function loadWorkspace() {
@@ -175,7 +201,8 @@ export function Dashboard() {
       const data = await response.json() as { workspaces?: Array<Client & { sheetUrl?: string }> };
       if (data.workspaces?.length) {
         const normalized = data.workspaces.map((item) => ({ ...item, id: Number(item.id), initials: item.initials || initials(item.name), color: item.color || "#7646ff" }));
-        setClients(normalized); setSheetUrls(Object.fromEntries(data.workspaces.filter((item) => item.sheetUrl).map((item) => [Number(item.id), item.sheetUrl!] as const)));
+        const savedSheetUrls = Object.fromEntries(data.workspaces.filter((item) => item.sheetUrl).map((item) => [Number(item.id), item.sheetUrl!] as const));
+        setClients(normalized); setSheetUrls((current) => ({ ...current, ...savedSheetUrls }));
         if (!normalized.some((item) => item.id === clientId)) setClientId(normalized[0].id);
       }
     } catch {}
@@ -188,9 +215,11 @@ export function Dashboard() {
 
   async function refreshDashboard() {
     setRefreshing(true);
-    await Promise.all([loadSheet(sheetUrls[clientId], true), loadWorkspace(), loadMeta()]);
+    const currentSheetUrl = sheetUrls[clientId] || (clientId === 1 ? sheetUrlDefault : "");
+    const [sheetResult] = await Promise.all([loadSheet(currentSheetUrl, true), loadWorkspace(), loadMeta()]);
     setRefreshing(false);
-    notify("Latest Google Sheets data loaded");
+    if (!sheetResult) { notify("Google Sheets refresh failed"); return; }
+    notify(`Refreshed ${sheetResult.dealCount} unique closed deals${sheetResult.duplicateCount ? ` · removed ${sheetResult.duplicateCount} duplicate${sheetResult.duplicateCount === 1 ? "" : "s"}` : ""}`);
   }
 
   function selectedBounds() {
@@ -305,7 +334,7 @@ export function Dashboard() {
     {sidebarOpen && <button className="scrim" onClick={() => setSidebarOpen(false)} aria-label="Close menu" />}
     <section className="content"><header className="topbar"><button className="menu-btn" onClick={() => setSidebarOpen(true)}>☰</button><div className="crumb"><span>Dashboards</span><b>/</b><strong>{tab}</strong></div><div className="top-actions"><button className="invite-btn" onClick={() => setModal("member")}>＋ Invite member</button></div></header>
       <div className="dashboard"><div className="page-title"><div><h1>{client.name} <span>{tab}</span></h1></div><div className="title-actions"><button onClick={() => void refreshDashboard()} disabled={refreshing}>{refreshing ? "…" : "↻"} <span>{refreshing ? "Refreshing" : "Refresh data"}</span></button><button onClick={() => setActionMenu(!actionMenu)}>⋯</button>{actionMenu && <div className="action-menu"><button onClick={openSettings}>Workspace settings</button><button onClick={() => setModal("sheet")}>Manage data source</button></div>}</div></div>
-        {["Overview", "Closed Deals", "Payouts", "Media KPIs"].includes(tab) && <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className={`sheet-pill ${sheetStatus}`} onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : sheetStatus === "connected" ? `Google Sheets live${sheetData ? ` · ${sheetData.updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` : sheetStatus === "error" ? "Sheet error" : "Connect sheet"}</button></div>}
+        {["Overview", "Closed Deals", "Payouts", "Media KPIs"].includes(tab) && <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className="refresh-data" onClick={() => void refreshDashboard()} disabled={refreshing} aria-label="Refresh Google Sheets data">{refreshing ? "Refreshing…" : "↻ Refresh data"}</button><button className={`sheet-pill ${sheetStatus}`} onClick={() => { setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : sheetStatus === "connected" ? `Google Sheets live${sheetData ? ` · ${sheetData.updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` : sheetStatus === "error" ? "Sheet error" : "Connect sheet"}</button></div>}
 
         {tab === "Overview" && <><div className="charts"><Chart data={period.cashSeries} labels={period.labels} color="#8b6cff" fill="rgba(139,108,255,.28)" label="Cash collected by payment date" total={money(period.cash)} /><Chart data={period.revenueSeries} labels={period.labels} color="#38d6b6" fill="rgba(56,214,182,.22)" label="Revenue generated by payment date" total={money(period.revenue)} /></div>
           {period.missing > 0 && <div className="data-warning">ⓘ {period.missing} closed {period.missing === 1 ? "deal is" : "deals are"} missing a Date Closed and excluded from date-range totals and charts.</div>}

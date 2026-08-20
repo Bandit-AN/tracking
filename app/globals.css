@@ -101,6 +101,7 @@ select option { background:#17141f; color:#ddd7e6; }
 ::selection { background:#8261ef; color:white; }
 ::-webkit-scrollbar { width:9px;height:9px } ::-webkit-scrollbar-track{background:#0e0c13} ::-webkit-scrollbar-thumb{background:#383143;border-radius:10px;border:2px solid #0e0c13}
 .sheet-pill{height:36px;border:1px solid #373043;background:#17141f;color:#8f889d;border-radius:8px;padding:0 11px;font-size:9px;font-weight:700;white-space:nowrap}.sheet-pill span{font-size:7px;margin-right:6px}.sheet-pill.connected{color:#55dfc1;border-color:#255145;background:#132a25}.sheet-pill.connected span{color:#3cdbb9}.sheet-pill.loading{color:#b49cff}.sheet-pill.error{color:#f1968a;border-color:#5a312d;background:#2a1717}.kpi-top .live{color:#45d9b9;letter-spacing:.4px}
+.refresh-data{height:36px;border:1px solid #67539b;background:#251d38;color:#d9ccff;border-radius:8px;padding:0 13px;font-size:10px;font-weight:750;white-space:nowrap}.refresh-data:hover{border-color:#8b6cff;background:#302448;color:#fff}.refresh-data:disabled{cursor:wait;opacity:.65}
 @media(max-width:760px){.sheet-pill{width:100%}}
 
 .client-avatar img,.client-popover img{width:100%;height:100%;object-fit:cover;border-radius:inherit}
