@@ -24,6 +24,7 @@ const money = (value: number) => new Intl.NumberFormat("en-US", { style: "curren
 const numeric = (value = "") => Number(value.replace(/[$,%\s,]/g, "")) || 0;
 const sheetIdFromUrl = (value: string) => value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1] ?? value.trim();
 const initials = (name: string) => name.split(/\s+/).map((word) => word[0]).join("").slice(0, 2).toUpperCase();
+const repNames = (value: string) => value.split(/\s*\/\s*|\s*,\s*/).map((name) => name.trim()).filter(Boolean);
 
 function uniqueDealRows(rows: string[][]) {
   const seen = new Set<string>();
@@ -142,15 +143,18 @@ function Chart({ data, labels, color, fill, label, total }: { data: number[]; la
 }
 
 function AttributionChart({ title, items, color }: { title: string; items: Array<{ label: string; value: number }>; color: string[] }) {
-  const total = items.reduce((sum, item) => sum + item.value, 0); let cursor = 0;
-  const gradient = items.map((item, i) => { const start = cursor; cursor += total ? item.value / total * 100 : 0; return `${color[i % color.length]} ${start}% ${cursor}%`; }).join(", ") || "#2a2533 0 100%";
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  const gradient = items.reduce<{ cursor: number; stops: string[] }>((result, item, index) => {
+    const end = result.cursor + (total ? item.value / total * 100 : 0);
+    return { cursor: end, stops: [...result.stops, `${color[index % color.length]} ${result.cursor}% ${end}%`] };
+  }, { cursor: 0, stops: [] }).stops.join(", ") || "#2a2533 0 100%";
   return <article className="attribution-card"><div><h3>{title}</h3><strong>{money(total)}</strong></div><div className="donut" style={{ background: `conic-gradient(${gradient})` }}><span>{items.length}</span></div><ul>{items.map((item, i) => <li key={item.label}><i style={{ background: color[i % color.length] }} /><span>{item.label}</span><b>{money(item.value)}</b><small>{total ? (item.value / total * 100).toFixed(1) : 0}%</small></li>)}</ul></article>;
 }
 
-function PerformanceTable({ title, people }: { title: "Closer" | "Setter"; people: Person[] }) {
+function PerformanceTable({ title, people, range }: { title: "Closer" | "Setter"; people: Person[]; range: string }) {
   const rateLabel = title === "Setter" ? "Show rate" : "Close rate";
   return <article className="table-card">
-    <div className="section-head"><div><h2>{title} performance</h2><p>Sorted by most cash collected</p></div></div>
+    <div className="section-head"><div><h2>{title} performance</h2><p>{range} · sorted by most cash collected</p></div></div>
     <div className="table-wrap"><table><thead><tr><th>{title}</th><th>{title === "Setter" ? "Booked" : "Calls"}</th><th>{title === "Setter" ? "Taken" : "Closed"}</th><th>{rateLabel}</th><th>Cash collected</th><th>Revenue</th><th>Commission owed</th></tr></thead><tbody>
       {people.map((p, i) => <tr key={p.name}><td><span className={`person p${i % 4}`}>{initials(p.name)}</span><div><b>{p.name}</b><small>{p.role}</small></div></td><td>{p.calls}</td><td>{p.closed}</td><td><span className="rate">{p.calls ? Math.round(p.closed / p.calls * 100) : 0}%</span></td><td>{money(p.cash)}</td><td>{money(p.revenue)}</td><td>{money(Math.max(0, p.commission - p.paid))}</td></tr>)}
       {!people.length && <tr><td colSpan={7}>No team data in this sheet.</td></tr>}
@@ -253,9 +257,9 @@ export function Dashboard() {
     } catch {}
   }
 
-  useEffect(() => { void loadWorkspaceList(); }, []);
-  useEffect(() => { void loadSheet(); void loadWorkspace(); void loadSupport(); }, [clientId]);
-  useEffect(() => { void loadMeta(); }, [clientId, range, customStart, customEnd]);
+  useEffect(() => { const timer = window.setTimeout(() => void loadWorkspaceList(), 0); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => { const timer = window.setTimeout(() => { void loadSheet(); void loadWorkspace(); void loadSupport(); }, 0); return () => window.clearTimeout(timer); }, [clientId]);
+  useEffect(() => { const timer = window.setTimeout(() => void loadMeta(), 0); return () => window.clearTimeout(timer); }, [clientId, range, customStart, customEnd]);
   const notify = (text: string) => { setToast(text); window.setTimeout(() => setToast(""), 2800); };
   useEffect(() => {
     const params = new URLSearchParams(window.location.search); const metaResult = params.get("meta"); if (!metaResult) return;
@@ -351,9 +355,43 @@ export function Dashboard() {
     }).sort((a, b) => b.cash - a.cash);
   }, [agencySources, clientId, clients, range, customEnd, customStart]);
 
-  const closerRows = useMemo(() => [...(sheetData?.closers ?? [])].sort((a, b) => b.cash - a.cash), [sheetData]);
-  const setters = useMemo(() => [...(sheetData?.setters ?? [])].sort((a, b) => b.cash - a.cash), [sheetData]);
   const payoutHistory = useMemo(() => sheetData?.sheetPayouts.length ? sheetData.sheetPayouts : payouts, [sheetData, payouts]);
+  const closerRows = useMemo(() => {
+    const rows = new Map<string, Person>();
+    const get = (name: string) => {
+      const key = name.toLowerCase();
+      if (!rows.has(key)) rows.set(key, { name, role: "Closer", calls: 0, closed: 0, cash: 0, revenue: 0, commission: 0, paid: 0 });
+      return rows.get(key)!;
+    };
+    (sheetData?.closers ?? []).forEach((person) => get(person.name));
+    period.meetings.forEach(({ meeting }) => repNames(meeting.closer).forEach((name) => { get(name).calls++; }));
+    period.dated.forEach(({ deal }) => repNames(deal.closer).forEach((name) => { const row = get(name); row.closed++; row.cash += deal.cash; row.revenue += deal.offer; }));
+    const end = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay();
+    const start = range === "Custom" ? new Date(`${customStart}T00:00:00`) : rangeStart(range, end);
+    rows.forEach((person) => {
+      person.commission = person.cash * .10;
+      person.paid = payoutHistory.filter((payout) => payout.member.split(":").at(-1)?.toLowerCase() === person.name.toLowerCase()).filter((payout) => { const date = parseSheetDate(payout.date); return !!date && (range === "All time" || (date >= start && date <= end)); }).reduce((sum, payout) => sum + payout.amount, 0);
+    });
+    return [...rows.values()].sort((a, b) => b.cash - a.cash || b.closed - a.closed);
+  }, [payoutHistory, period, range, sheetData, customEnd, customStart]);
+  const setters = useMemo(() => {
+    const rows = new Map<string, Person>();
+    const get = (name: string) => {
+      const key = name.toLowerCase();
+      if (!rows.has(key)) rows.set(key, { name, role: "Setter", calls: 0, closed: 0, cash: 0, revenue: 0, commission: 0, paid: 0 });
+      return rows.get(key)!;
+    };
+    (sheetData?.setters ?? []).forEach((person) => get(person.name));
+    period.meetings.forEach(({ meeting }) => repNames(meeting.setter).forEach((name) => { const row = get(name); row.calls++; if (meeting.taken) row.closed++; }));
+    period.dated.forEach(({ deal }) => repNames(deal.setter).forEach((name) => { const row = get(name); row.cash += deal.cash; row.revenue += deal.offer; }));
+    const end = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay();
+    const start = range === "Custom" ? new Date(`${customStart}T00:00:00`) : rangeStart(range, end);
+    rows.forEach((person) => {
+      person.commission = person.cash * .05;
+      person.paid = payoutHistory.filter((payout) => payout.member.split(":").at(-1)?.toLowerCase() === person.name.toLowerCase()).filter((payout) => { const date = parseSheetDate(payout.date); return !!date && (range === "All time" || (date >= start && date <= end)); }).reduce((sum, payout) => sum + payout.amount, 0);
+    });
+    return [...rows.values()].sort((a, b) => b.cash - a.cash || b.closed - a.closed);
+  }, [payoutHistory, period, range, sheetData, customEnd, customStart]);
   const payoutPeople = useMemo(() => {
     const grouped = new Map<string, Person & { roles: string[]; key: string }>();
     [...closerRows, ...setters, ...(sheetData?.operators ?? [])].forEach((person) => { const current = grouped.get(person.name); if (current) { current.commission += person.commission; current.paid += person.paid; current.roles.push(person.role); } else grouped.set(person.name, { ...person, key: `${person.role}:${person.name}`, roles: [person.role] }); });
@@ -407,7 +445,7 @@ export function Dashboard() {
     <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
       <div className="brand"><span className="brand-mark"><img src="/moonrift-logo.png" alt="" /></span><span>MoonRift</span></div><div className="workspace-label">WORKSPACE</div>
       <button className="client-select" onClick={() => setClientMenu(!clientMenu)}><span className="client-avatar" style={{ background: client.color }}>{client.avatar ? <img src={client.avatar} alt="" /> : client.initials}</span><span><strong>{client.name}</strong><small>{client.industry}</small></span><em>⌄</em></button>
-      {clientMenu && <div className="client-popover">{clients.filter((c) => c.id !== agencyClient.id || isAgencyAdmin).map((c) => <button key={c.id} onClick={() => { setClientId(c.id); setClientMenu(false); if (c.id === agencyClient.id) { setActiveNav("Dashboard"); setTab("Overview"); } }}><span style={{ background: c.color }}>{c.avatar ? <img src={c.avatar} alt="" /> : c.initials}</span><b>{c.name}</b>{c.id === clientId && "✓"}</button>)}<button className="new-client" onClick={() => { setModal("client"); setClientMenu(false); }}>＋ New workspace</button></div>}
+      {clientMenu && <div className="client-popover">{clients.map((c) => <button key={c.id} onClick={() => { setClientId(c.id); setClientMenu(false); if (c.id === agencyClient.id) { setActiveNav("Dashboard"); setTab("Overview"); } }}><span style={{ background: c.color }}>{c.avatar ? <img src={c.avatar} alt="" /> : c.initials}</span><b>{c.name}</b>{c.id === clientId && "✓"}</button>)}<button className="new-client" onClick={() => { setModal("client"); setClientMenu(false); }}>＋ New workspace</button></div>}
       <nav>{[["Dashboard", "◈"], ["Sales", "▤"], ["Payouts", "◇"], ["Media KPIs", "◉"]].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}<div className="nav-line" />{[["Team members", "♙"], ["Data sources", "⌁"], ...(isAgencyAdmin ? [["Agency inbox", "✉"]] : []), ...(clientId === agencyClient.id ? [] : [["Settings", "⚙"]])].map(([item, icon]) => <button key={item} className={activeNav === item ? "active" : ""} onClick={() => selectNav(item)}><span>{icon}</span>{item}</button>)}</nav>
       <div className="sidebar-bottom"><button className="help" onClick={() => setModal("support")}><span>?</span><div><strong>Need help?</strong><small>Message MoonRift Media</small></div></button><div className="profile"><span>PP</span><div><strong>Peter Phan</strong><small>{isAgencyAdmin ? "MoonRift agency admin" : "Workspace user"}</small></div></div></div>
     </aside>
@@ -434,7 +472,7 @@ export function Dashboard() {
           ].map(([label, display, current, previous]) => { const change = percentChange(Number(current), Number(previous)); return <article className="kpi" key={String(label)}><span>{label}</span><strong>{display}</strong><small className={period.allTime ? "neutral-change" : change >= 0 ? "positive-change" : "negative-change"}>{period.allTime ? "All available data" : `${change >= 0 ? "↑" : "↓"} ${Math.abs(change).toFixed(1)}% vs prior period`}</small></article>; })}</div>
           <div className="metrics-section"><div className="metrics-title"><div><span>PAID AD METRICS</span><h2>Meta performance based on CRM-attributed revenue</h2></div>{!metaConnected && <button onClick={() => setModal("meta")}>Connect Meta Ads</button>}</div><div className="paid-grid"><article><span>Ad spend</span><strong>{metaConnected ? money(adSpend) : "—"}</strong><small>{metaStatus === "loading" ? "Refreshing Meta data…" : "Pulled from Meta Ads"}</small></article><article><span>Meta-attributed revenue</span><strong>{money(metaRevenue)}</strong><small>From Closed Deals source attribution</small></article><article><span>Meta-attributed cash</span><strong>{money(metaCash)}</strong><small>Cash collected from Meta-sourced deals</small></article><article><span>CRM ROAS</span><strong>{metaConnected && adSpend ? `${(metaRevenue / adSpend).toFixed(2)}×` : "—"}</strong><small>Attributed revenue ÷ Meta ad spend</small></article></div></div>
           <div className="attribution-grid"><AttributionChart title="Cash collected by lead source" items={period.cashAttribution} color={["#8b6cff", "#38d6b6", "#ffad66", "#5aa7ff", "#ef6ea8"]} /><AttributionChart title="Revenue generated by lead source" items={period.revenueAttribution} color={["#38d6b6", "#8b6cff", "#5aa7ff", "#ffad66", "#ef6ea8"]} /></div>
-          <PerformanceTable title="Closer" people={closerRows} /><PerformanceTable title="Setter" people={setters} /></>}
+          <div className="performance-grid"><PerformanceTable title="Closer" people={closerRows} range={range} /><PerformanceTable title="Setter" people={setters} range={range} /></div></>}
 
         {tab === "Closed Deals" && <article className="table-card deals-card"><div className="section-head"><div><h2>Closed Deals</h2><p>Live from the Closed Deals tab in Google Sheets · {range}</p></div><strong>{period.dated.length} deals</strong></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Setter</th><th>Closer</th><th>Source</th><th>Specific ad / video</th><th>Paid through</th><th>Cash collected</th><th>Offer amount</th><th>Amount owed</th><th>Date closed</th><th>Next payment</th></tr></thead><tbody>{period.dated.map(({ deal }) => <tr key={`${deal.lead}-${deal.phone}`}><td><div><b>{deal.lead}</b><small>{deal.email || deal.phone}</small></div></td><td>{deal.setter}</td><td>{deal.closer}</td><td>{deal.source}</td><td>{deal.video || deal.campaign || "—"}</td><td>{deal.method}</td><td>{money(deal.cash)}</td><td>{money(deal.offer)}</td><td>{money(deal.owed)}</td><td>{deal.date || <span className="missing-date">Missing date</span>}</td><td>{deal.next || "—"}</td></tr>)}</tbody></table></div></article>}
 
