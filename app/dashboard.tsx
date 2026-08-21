@@ -3,14 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type Client = { id: number; name: string; industry: string; initials: string; color: string; avatar?: string };
-type Person = { name: string; role: "Closer" | "Setter" | "Operator" | "Co-owner"; calls: number; closed: number; cash: number; revenue: number; commission: number; paid: number };
-type Deal = { lead: string; phone: string; email: string; setter: string; closer: string; method: string; cash: number; offer: number; owed: number; date: string; next: string; end: string; source: string; medium: string; campaign: string; video: string };
+type Person = { name: string; role: "Closer" | "Setter" | "Operator" | "Growth Operator" | "Co-owner"; calls: number; closed: number; cash: number; revenue: number; commission: number; paid: number; commissionRate?: number };
+type Deal = { lead: string; phone: string; email: string; setter: string; closer: string; method: string; cash: number; offer: number; owed: number; date: string; next: string; end: string; source: string; medium: string; campaign: string; video: string; workspaceId: number; workspaceName?: string; sheetRow: number; growthOperator?: string };
 type Meeting = { lead: string; email: string; date: string; status: string; setter: string; closer: string; taken: boolean };
 type Booking = { name: string; email: string; date: string; source: string; medium: string; campaign: string; video: string; leadSource: string };
 type Payout = { id: number; workspaceId: number; member: string; date: string; method: string; amount: number };
 type MetaInsight = { date_start: string; ad_id?: string; ad_name?: string; campaign_name?: string; spend: string; impressions?: string; clicks?: string };
 type SupportMessage = { id: number; workspaceId: number; workspaceName: string; senderEmail: string; message: string; status: "open" | "resolved"; createdAt: string };
-type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; bookings: Booking[]; sheetPayouts: Payout[]; applicationDates: string[]; duplicateDealsRemoved: number; updatedAt: Date };
+type SheetMetrics = { booked: number; taken: number; showRate: number; closers: Person[]; setters: Person[]; operators: Person[]; deals: Deal[]; meetings: Meeting[]; bookings: Booking[]; sheetPayouts: Payout[]; applicationDates: string[]; applicationCount: number; duplicateDealsRemoved: number; updatedAt: Date };
 type AgencySource = { client: Client; data: SheetMetrics };
 
 const sheetUrlDefault = "https://docs.google.com/spreadsheets/d/1ahyY64u9uYmcEDFi1XAJRFmnZ_gX_6VQHUnWvswkvmg/edit?usp=sharing";
@@ -25,28 +25,57 @@ const numeric = (value = "") => Number(value.replace(/[$,%\s,]/g, "")) || 0;
 const sheetIdFromUrl = (value: string) => value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1] ?? value.trim();
 const initials = (name: string) => name.split(/\s+/).map((word) => word[0]).join("").slice(0, 2).toUpperCase();
 const repNames = (value: string) => value.split(/\s*\/\s*|\s*,\s*/).map((name) => name.trim()).filter(Boolean);
+const normalizedLabel = (value = "") => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 
-function uniqueDealRows(rows: string[][]) {
+function columnIndex(headers: string[], aliases: string[], fallback = -1) {
+  const normalized = headers.map(normalizedLabel);
+  const index = aliases.map(normalizedLabel).map((alias) => normalized.indexOf(alias)).find((item) => item >= 0);
+  return index ?? fallback;
+}
+
+function rowValue(row: string[], headers: string[], aliases: string[], fallback = -1) {
+  const index = columnIndex(headers, aliases, fallback);
+  return index >= 0 ? row[index] ?? "" : "";
+}
+
+function uniqueDeals(rows: Deal[]) {
   const seen = new Set<string>();
   let duplicateCount = 0;
   const summaryLabels = /^(?:total|totals|grand total|revenue generated|cash collected|contracted amount|setter name|closer name|other %|operator)$/i;
-  const deals = rows.filter((row) => {
-    const lead = row[0]?.trim() ?? "";
+  const deals = rows.filter((deal) => {
+    const lead = deal.lead.trim();
     if (!lead || summaryLabels.test(lead)) return false;
 
     // Only actual deal rows may contribute to dashboard revenue. Summary rows
     // have no contact or assigned sales rep and are deliberately excluded.
-    const hasDealIdentity = Boolean(row[1]?.trim() || row[2]?.trim() || row[3]?.trim() || row[4]?.trim());
+    const hasDealIdentity = Boolean(deal.phone.trim() || deal.email.trim() || deal.setter.trim() || deal.closer.trim());
     if (!hasDealIdentity) return false;
 
-    const key = [lead, row[1], row[2], row[3], row[4], row[6], row[7], row[8], row[9]]
-      .map((value) => (value ?? "").trim().toLowerCase())
+    const key = [lead, deal.phone, deal.email, deal.setter, deal.closer, deal.cash, deal.offer, deal.owed, deal.date]
+      .map((value) => String(value ?? "").trim().toLowerCase())
       .join("|");
     if (seen.has(key)) { duplicateCount++; return false; }
     seen.add(key);
     return true;
   });
   return { deals, duplicateCount };
+}
+
+function assignGrowthOperatorDeals(deals: Deal[], operators: Person[]) {
+  const assigned = deals.map((deal) => ({ ...deal }));
+  operators.filter((person) => person.role === "Growth Operator" && (person.cash > 0 || person.revenue > 0)).forEach((operator) => {
+    let best: { start: number; end: number } | null = null;
+    for (let start = 0; start < assigned.length; start++) {
+      let cash = 0; let revenue = 0;
+      for (let end = start; end < assigned.length; end++) {
+        if (assigned[end].growthOperator) break;
+        cash += assigned[end].cash; revenue += assigned[end].offer;
+        if (Math.abs(cash - operator.cash) < .01 && Math.abs(revenue - operator.revenue) < .01) best = { start, end };
+      }
+    }
+    if (best) for (let index = best.start; index <= best.end; index++) assigned[index].growthOperator = operator.name;
+  });
+  return assigned;
 }
 
 function parseCsv(text: string) {
@@ -112,9 +141,10 @@ function combineAgencyMetrics(sources: AgencySource[]): SheetMetrics {
   return {
     booked, taken, showRate: booked ? taken / booked * 100 : 0,
     closers: mergePeople("closers"), setters: mergePeople("setters"), operators: mergePeople("operators"),
-    deals: sources.flatMap(({ data }) => data.deals), meetings: sources.flatMap(({ data }) => data.meetings),
+    deals: sources.flatMap(({ client, data }) => data.deals.map((deal) => ({ ...deal, workspaceName: client.name }))), meetings: sources.flatMap(({ data }) => data.meetings),
     bookings: sources.flatMap(({ data }) => data.bookings), sheetPayouts: sources.flatMap(({ data }) => data.sheetPayouts),
     applicationDates: sources.flatMap(({ data }) => data.applicationDates),
+    applicationCount: sources.reduce((sum, { data }) => sum + data.applicationCount, 0),
     duplicateDealsRemoved: sources.reduce((sum, { data }) => sum + data.duplicateDealsRemoved, 0), updatedAt: new Date(),
   };
 }
@@ -181,27 +211,49 @@ export function Dashboard() {
 
   async function fetchSheetMetrics(url: string, workspaceId: number, force = false): Promise<SheetMetrics> {
       const id = sheetIdFromUrl(url);
-      const getSheet = async (sheet: string) => { const response = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(id)}&sheet=${encodeURIComponent(sheet)}${force ? `&refresh=${Date.now()}` : ""}`, { cache: "no-store" }); if (!response.ok) throw new Error(); return parseCsv(await response.text()); };
-      const [overview, closed, crm, events, payoutRows, bookedCalls] = await Promise.all([getSheet("System Overview"), getSheet("Closed Deals"), getSheet("Sales CRM"), getSheet("Events"), getSheet("Payouts"), getSheet("Booked Calls")]);
-      const totalsHeader = overview.findIndex((row) => row.some((cell) => cell.includes("Meetings Booked"))); const totals = overview[totalsHeader + 1] ?? [];
-      const section = (name: string, stop: string[]) => { const start = overview.findIndex((row) => row[0]?.trim() === name); if (start < 0) return []; const rows = overview.slice(start + 1); const end = rows.findIndex((row) => stop.includes(row[0]?.trim())); return (end < 0 ? rows : rows.slice(0, end)).filter((row) => row[0]?.trim()); };
-      const toPeople = (rows: string[][], role: Person["role"]) => rows.map((row) => ({ name: row[0].trim(), role, calls: numeric(row[1]), closed: numeric(row[2]), revenue: numeric(row[4]), cash: numeric(row[5]), commission: numeric(row[6]), paid: numeric(row[7]) })).sort((a, b) => b.cash - a.cash);
-      const otherRows = section("Other %", []);
-      const header = closed.findIndex((row) => row[0]?.trim() === "Lead Name");
-      const { deals: dealRows, duplicateCount } = uniqueDealRows(header >= 0 ? closed.slice(header + 1) : []);
-      const payoutHeader = payoutRows.findIndex((row) => row[0]?.trim() === "Payee"); const payoutData = payoutHeader >= 0 ? payoutRows.slice(payoutHeader + 1).filter((row) => row[0]?.trim()) : [];
-      const bookingHeader = bookedCalls.findIndex((row) => row[0]?.trim() === "timestamp"); const bookingData = bookingHeader >= 0 ? bookedCalls.slice(bookingHeader + 1).filter((row) => row[0]?.trim()) : [];
+      const getSheet = async (sheet: string, optional = false) => { try { const response = await fetch(`/api/sheets?spreadsheetId=${encodeURIComponent(id)}&sheet=${encodeURIComponent(sheet)}${force ? `&refresh=${Date.now()}` : ""}`, { cache: "no-store" }); if (!response.ok) throw new Error(); return parseCsv(await response.text()); } catch (error) { if (optional) return []; throw error; } };
+      const [overview, closed, crm, applications, events, payoutRows, bookedCalls] = await Promise.all([getSheet("System Overview"), getSheet("Closed Deals"), getSheet("Sales CRM"), getSheet("Applications", true), getSheet("Events", true), getSheet("Payouts", true), getSheet("Booked Calls", true)]);
+      const totalsHeader = overview.findIndex((row) => row.some((cell) => normalizedLabel(cell) === "meetingsbooked")); const totalHeaders = overview[totalsHeader] ?? []; const totals = overview[totalsHeader + 1] ?? [];
+      const overviewSectionLabels = ["Setter Name", "Closer Name", "Other %", "Operator", "Other Employees", "Growth Operator", "Growth Operators", "Growth Operator Name"].map(normalizedLabel);
+      const findSection = (names: string[]) => {
+        const aliases = names.map(normalizedLabel); const start = overview.findIndex((row) => aliases.includes(normalizedLabel(row[0])));
+        if (start < 0) return { headers: [] as string[], rows: [] as string[][] };
+        const remaining = overview.slice(start + 1); const end = remaining.findIndex((row) => overviewSectionLabels.includes(normalizedLabel(row[0])));
+        return { headers: overview[start], rows: (end < 0 ? remaining : remaining.slice(0, end)).filter((row) => row[0]?.trim()) };
+      };
+      const peopleFromSection = (names: string[], roleForName: (name: string) => Person["role"], revenueShareLayout = false) => {
+        const { headers, rows } = findSection(names);
+        return rows.map((row) => {
+          const name = rowValue(row, headers, names, 0).trim();
+          const cash = revenueShareLayout ? 0 : numeric(rowValue(row, headers, ["Cash Collected"], 5)); const commission = numeric(rowValue(row, headers, ["Setter Commision", "Setter Commission", "Closer Commission", "GO Commission", "Commission", "Amount Owed"], revenueShareLayout ? 2 : 6));
+          const statedRate = numeric(rowValue(row, headers, ["Rev-Share", "Revenue Share"], revenueShareLayout ? 1 : -1));
+          return { name, role: roleForName(name), calls: revenueShareLayout ? 0 : numeric(rowValue(row, headers, ["Meetings Booked", "Meetings Taken", "Qualified Meetings", "Calls"], 1)), closed: revenueShareLayout ? 0 : numeric(rowValue(row, headers, ["Showed Up", "Meetings Closed", "Calls Closed"], 2)), revenue: revenueShareLayout ? 0 : numeric(rowValue(row, headers, ["Revenue Generated", "Revenue Set"], 4)), cash, commission, paid: numeric(rowValue(row, headers, ["Paid Out", "Amount Paid"], revenueShareLayout ? 3 : 7)), commissionRate: statedRate ? statedRate / 100 : cash ? commission / cash : undefined };
+        }).filter((person) => person.name).sort((a, b) => b.cash - a.cash);
+      };
+      const setters = peopleFromSection(["Setter Name"], () => "Setter");
+      const closers = peopleFromSection(["Closer Name"], () => "Closer");
+      const revenueShareOperators = peopleFromSection(["Other %", "Operator"], (name) => /king/i.test(name) ? "Co-owner" : "Operator", true);
+      const growthOperators = peopleFromSection(["Other Employees", "Growth Operator", "Growth Operators", "Growth Operator Name"], () => "Growth Operator");
+      const operators = [...revenueShareOperators, ...growthOperators];
+      const header = closed.findIndex((row) => normalizedLabel(row[0]) === "leadname"); const dealHeaders = closed[header] ?? [];
+      const mappedDeals = header < 0 ? [] : closed.slice(header + 1).map((row, index): Deal => ({
+        lead: rowValue(row, dealHeaders, ["Lead Name", "Client Name", "Customer Name"], 0), phone: rowValue(row, dealHeaders, ["Phone Number", "Phone"], 1), email: rowValue(row, dealHeaders, ["Email", "Email Address"], 2), setter: rowValue(row, dealHeaders, ["Setter", "Setter Name"], 3), closer: rowValue(row, dealHeaders, ["Closer", "Closer Name"], 4), method: rowValue(row, dealHeaders, ["Paid Through", "Payment Method"], 5),
+        cash: numeric(rowValue(row, dealHeaders, ["Cash Collected", "Collected"])), offer: numeric(rowValue(row, dealHeaders, ["Revenue Generated", "Offer Amount", "Revenue Contracted", "Contract Value"])), owed: numeric(rowValue(row, dealHeaders, ["Amount Owed", "Balance Owed", "Remaining Balance"])), date: rowValue(row, dealHeaders, ["Date Closed", "Closed Date", "Payment Date"]), next: rowValue(row, dealHeaders, ["Next Payment Date", "Next Payment"]), end: rowValue(row, dealHeaders, ["Program End Date", "End Date"]), source: rowValue(row, dealHeaders, ["Source", "Lead Source", "Attribution Source"]) || "Unattributed", medium: rowValue(row, dealHeaders, ["Medium", "UTM Medium"]), campaign: rowValue(row, dealHeaders, ["Campaign", "UTM Campaign"]), video: rowValue(row, dealHeaders, ["Video", "Video ID", "Specific Ad / Video", "Ad", "Creative", "UTM Content"]), workspaceId, sheetRow: header + index + 2,
+      }));
+      const unique = uniqueDeals(mappedDeals); const deals = assignGrowthOperatorDeals(unique.deals, growthOperators);
+      const payoutHeader = payoutRows.findIndex((row) => normalizedLabel(row[0]) === "payee"); const payoutHeaders = payoutRows[payoutHeader] ?? []; const payoutData = payoutHeader >= 0 ? payoutRows.slice(payoutHeader + 1).filter((row) => row[0]?.trim()) : [];
+      const crmHeader = crm.findIndex((row) => normalizedLabel(row[0]) === "leadname"); const crmHeaders = crm[crmHeader] ?? []; const crmData = crmHeader >= 0 ? crm.slice(crmHeader + 1) : [];
+      const applicationHeader = applications.findIndex((row) => normalizedLabel(row[0]) === "status" || row.some((cell) => normalizedLabel(cell) === "submittedat")); const applicationHeaders = applications[applicationHeader] ?? []; const applicationData = applicationHeader >= 0 ? applications.slice(applicationHeader + 1).filter((row) => row.some((cell) => cell.trim())) : [];
+      const bookingHeader = bookedCalls.findIndex((row) => normalizedLabel(row[0]) === "timestamp"); const bookingData = bookingHeader >= 0 ? bookedCalls.slice(bookingHeader + 1).filter((row) => row[0]?.trim()) : [];
       return {
-        booked: numeric(totals[0]), taken: numeric(totals[1]), showRate: numeric(totals[3]),
-        setters: toPeople(section("Setter Name", ["Closer Name"]), "Setter"),
-        closers: toPeople(section("Closer Name", ["Other %", "Operator"]), "Closer"),
-        operators: otherRows.filter((row) => !/^other %$/i.test(row[0])).map((row) => ({ name: row[0], role: /king/i.test(row[0]) ? "Co-owner" as const : "Operator" as const, calls: 0, closed: 0, revenue: 0, cash: 0, commission: numeric(row[2]), paid: numeric(row[3]) })),
-        deals: dealRows.map((row) => ({ lead: row[0], phone: row[1], email: row[2], setter: row[3], closer: row[4], method: row[5], cash: numeric(row[6]), offer: numeric(row[7]), owed: numeric(row[8]), date: row[9], next: row[10], end: row[11], source: row[12] || "Unattributed", medium: row[13] || "", campaign: row[14] || "", video: row[15] || "" })),
-        meetings: crm.slice(1).filter((row) => row[0]?.trim() && parseSheetDate(row[6])).map((row) => ({ lead: row[0], email: row[2] || "", date: row[6], status: row[3] || "", setter: row[4] || "", closer: row[5] || "", taken: !!row[3] && !/no show|rescheduled|booked/i.test(row[3]) })),
+        booked: numeric(rowValue(totals, totalHeaders, ["Meetings Booked"], 0)), taken: numeric(rowValue(totals, totalHeaders, ["Meetings Taken"], 1)), showRate: numeric(rowValue(totals, totalHeaders, ["Show Rate"], 3)),
+        setters, closers, operators, deals,
+        meetings: crmData.filter((row) => rowValue(row, crmHeaders, ["Lead Name"], 0).trim() && parseSheetDate(rowValue(row, crmHeaders, ["Meeting Date", "Call Date"], 6))).map((row) => { const status = rowValue(row, crmHeaders, ["Status"], 3); return { lead: rowValue(row, crmHeaders, ["Lead Name"], 0), email: rowValue(row, crmHeaders, ["Email", "Email Address"], 2), date: rowValue(row, crmHeaders, ["Meeting Date", "Call Date"], 6), status, setter: rowValue(row, crmHeaders, ["Setter", "Setter Name"], 4), closer: rowValue(row, crmHeaders, ["Closer", "Closer Name"], 5), taken: !!status && !/no show|cancelled/i.test(status) }; }),
         bookings: bookingData.map((row) => ({ name: row[1] || "", email: row[2] || "", date: row[8] || row[0], source: row[10] || "", medium: row[11] || "", campaign: row[12] || "", video: (() => { try { return JSON.parse(row[14] || "{}").attribution?.video_id || row[12] || ""; } catch { return row[12] || ""; } })(), leadSource: row[15] || "" })),
-        sheetPayouts: payoutData.map((row, index) => ({ id: numeric(row[5]) || workspaceId * 1000000 + 900000 + index, workspaceId, member: row[4] ? `${row[4]}:${row[0]}` : row[0], date: row[1] || "", method: row[2] || "", amount: numeric(row[3]) })),
-        applicationDates: events.filter((row) => row[1]?.trim() === "application_submitted" && parseSheetDate(row[0])).map((row) => row[0]),
-        duplicateDealsRemoved: duplicateCount,
+        sheetPayouts: payoutData.map((row, index) => { const payee = rowValue(row, payoutHeaders, ["Payee"], 0); const role = rowValue(row, payoutHeaders, ["Role"], 4); return { id: numeric(rowValue(row, payoutHeaders, ["ID", "Payout ID"], 5)) || workspaceId * 1000000 + 900000 + index, workspaceId, member: role ? `${role}:${payee}` : payee, date: rowValue(row, payoutHeaders, ["Date", "Day"], 1), method: rowValue(row, payoutHeaders, ["Method", "Payment Method"], 2), amount: numeric(rowValue(row, payoutHeaders, ["Amount", "Payout Amount"], 3)) }; }),
+        applicationDates: applicationData.length ? applicationData.map((row) => rowValue(row, applicationHeaders, ["submitted_at", "Submitted At", "Timestamp"], 0)).filter((date) => !!parseSheetDate(date)) : events.filter((row) => row[1]?.trim() === "application_submitted" && parseSheetDate(row[0])).map((row) => row[0]),
+        applicationCount: applicationData.length || events.filter((row) => row[1]?.trim() === "application_submitted").length,
+        duplicateDealsRemoved: unique.duplicateCount,
         updatedAt: new Date(),
       };
   }
@@ -322,7 +374,8 @@ export function Dashboard() {
   const period = useMemo(() => {
     const now = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay(); const start = range === "Custom" ? new Date(`${customStart}T00:00:00`) : rangeStart(range, now);
     const allTime = range === "All time"; const dateInPeriod = (date: Date) => allTime || (date >= start && date <= now);
-    const dated = (sheetData?.deals ?? []).map((deal) => ({ deal, date: parseSheetDate(deal.date) })).filter((item): item is { deal: Deal; date: Date } => !!item.date && dateInPeriod(item.date));
+    const allDeals = sheetData?.deals ?? []; const missingDeals = allDeals.filter((deal) => !parseSheetDate(deal.date));
+    const dated = allDeals.map((deal) => ({ deal, date: parseSheetDate(deal.date) })).filter((item): item is { deal: Deal; date: Date } => !!item.date && dateInPeriod(item.date));
     const spanStart = allTime && dated.length ? new Date(Math.min(...dated.map((x) => x.date.getTime()))) : start;
     const days = Math.max(1, Math.ceil((now.getTime() - spanStart.getTime()) / 86400000) + 1); const bucketCount = days <= 30 ? days : Math.min(13, Math.ceil(days / 7)); const bucketDays = Math.ceil(days / bucketCount);
     const cashSeries = Array(bucketCount).fill(0); const revenueSeries = Array(bucketCount).fill(0); const labels = Array(bucketCount).fill("");
@@ -330,15 +383,16 @@ export function Dashboard() {
     dated.forEach(({ deal, date }) => { const index = Math.min(bucketCount - 1, Math.floor((date.getTime() - spanStart.getTime()) / 86400000 / bucketDays)); cashSeries[index] += deal.cash; revenueSeries[index] += deal.offer; });
     const meetings = (sheetData?.meetings ?? []).map((meeting) => ({ meeting, date: parseSheetDate(meeting.date)! })).filter((x) => x.date && dateInPeriod(x.date));
     const booked = meetings.length; const taken = meetings.filter((x) => x.meeting.taken).length;
+    const meetingsClosed = meetings.filter((x) => /^(?:closed|deposit)$/i.test(x.meeting.status.trim())).length;
     const periodMs = now.getTime() - start.getTime() + 1; const previousStart = new Date(start.getTime() - periodMs); const previousEnd = new Date(start.getTime() - 1);
     const previousDeals = allTime ? [] : (sheetData?.deals ?? []).map((deal) => ({ deal, date: parseSheetDate(deal.date) })).filter((x): x is { deal: Deal; date: Date } => !!x.date && x.date >= previousStart && x.date <= previousEnd);
     const previousMeetings = allTime ? [] : (sheetData?.meetings ?? []).map((meeting) => ({ meeting, date: parseSheetDate(meeting.date) })).filter((x) => !!x.date && x.date >= previousStart && x.date <= previousEnd);
-    const applications = (sheetData?.applicationDates ?? []).map(parseSheetDate).filter((date): date is Date => !!date && dateInPeriod(date)).length;
+    const applications = allTime ? sheetData?.applicationCount ?? 0 : (sheetData?.applicationDates ?? []).map(parseSheetDate).filter((date): date is Date => !!date && dateInPeriod(date)).length;
     const previousApplications = allTime ? 0 : (sheetData?.applicationDates ?? []).map(parseSheetDate).filter((date): date is Date => !!date && date >= previousStart && date <= previousEnd).length;
-    const current = { cash: dated.reduce((sum, x) => sum + x.deal.cash, 0), revenue: dated.reduce((sum, x) => sum + x.deal.offer, 0), closed: dated.length, booked, taken, show: booked ? taken / booked * 100 : 0, applications };
-    const previous = { cash: previousDeals.reduce((s, x) => s + x.deal.cash, 0), revenue: previousDeals.reduce((s, x) => s + x.deal.offer, 0), closed: previousDeals.length, booked: previousMeetings.length, taken: previousMeetings.filter((x) => x.meeting.taken).length, show: previousMeetings.length ? previousMeetings.filter((x) => x.meeting.taken).length / previousMeetings.length * 100 : 0, applications: previousApplications };
+    const current = { cash: dated.reduce((sum, x) => sum + x.deal.cash, 0), revenue: dated.reduce((sum, x) => sum + x.deal.offer, 0), closed: dated.length, meetingsClosed, booked, taken, show: booked ? taken / booked * 100 : 0, applications };
+    const previous = { cash: previousDeals.reduce((s, x) => s + x.deal.cash, 0), revenue: previousDeals.reduce((s, x) => s + x.deal.offer, 0), closed: previousDeals.length, meetingsClosed: previousMeetings.filter((x) => /^(?:closed|deposit)$/i.test(x.meeting.status.trim())).length, booked: previousMeetings.length, taken: previousMeetings.filter((x) => x.meeting.taken).length, show: previousMeetings.length ? previousMeetings.filter((x) => x.meeting.taken).length / previousMeetings.length * 100 : 0, applications: previousApplications };
     const attribution = (field: "cash" | "offer") => [...dated.reduce((map, { deal }) => { const label = deal.source || "Unattributed"; map.set(label, (map.get(label) ?? 0) + deal[field]); return map; }, new Map<string, number>())].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
-    return { dated, meetings, cashSeries, revenueSeries, labels, ...current, previous, allTime, cashAttribution: attribution("cash"), revenueAttribution: attribution("offer"), missing: (sheetData?.deals ?? []).filter((deal) => !parseSheetDate(deal.date)).length };
+    return { dated, meetings, cashSeries, revenueSeries, labels, ...current, previous, allTime, cashAttribution: attribution("cash"), revenueAttribution: attribution("offer"), missing: missingDeals.length, missingDeals };
   }, [sheetData, range, customStart, customEnd]);
 
   const agencyOfferRows = useMemo(() => {
@@ -364,8 +418,8 @@ export function Dashboard() {
       return rows.get(key)!;
     };
     (sheetData?.closers ?? []).forEach((person) => get(person.name));
-    period.meetings.forEach(({ meeting }) => repNames(meeting.closer).forEach((name) => { get(name).calls++; }));
-    period.dated.forEach(({ deal }) => repNames(deal.closer).forEach((name) => { const row = get(name); row.closed++; row.cash += deal.cash; row.revenue += deal.offer; }));
+    period.meetings.forEach(({ meeting }) => repNames(meeting.closer).forEach((name) => { const row = get(name); if (meeting.taken) row.calls++; if (/^(?:closed|deposit)$/i.test(meeting.status.trim())) row.closed++; }));
+    period.dated.forEach(({ deal }) => repNames(deal.closer).forEach((name) => { const row = get(name); row.cash += deal.cash; row.revenue += deal.offer; }));
     const end = range === "Custom" ? endOfDay(new Date(`${customEnd}T12:00:00`)) : endOfDay();
     const start = range === "Custom" ? new Date(`${customStart}T00:00:00`) : rangeStart(range, end);
     rows.forEach((person) => {
@@ -395,7 +449,6 @@ export function Dashboard() {
   const payoutPeople = useMemo(() => {
     const grouped = new Map<string, Person & { roles: string[]; key: string }>();
     [...closerRows, ...setters, ...(sheetData?.operators ?? [])].forEach((person) => { const current = grouped.get(person.name); if (current) { current.commission += person.commission; current.paid += person.paid; current.roles.push(person.role); } else grouped.set(person.name, { ...person, key: `${person.role}:${person.name}`, roles: [person.role] }); });
-    if (!grouped.has("King")) grouped.set("King", { name: "King", role: "Co-owner", roles: ["Co-owner"], key: "Co-owner:King", calls: 0, closed: 0, cash: 0, revenue: 0, commission: 0, paid: 0 });
     return [...grouped.values()];
   }, [closerRows, setters, sheetData]);
   const filteredPayouts = useMemo(() => {
@@ -416,11 +469,17 @@ export function Dashboard() {
     return [...rows.values()].sort((a, b) => b.cash - a.cash || b.appointments - a.appointments);
   }, [sheetData, period, metaInsights, range, customStart, customEnd]);
 
+  const growthOperatorSales = (name: string) => period.dated.filter(({ deal }) => deal.growthOperator === name).reduce((totals, { deal }) => ({ cash: totals.cash + deal.cash, revenue: totals.revenue + deal.offer, closes: totals.closes + 1 }), { cash: 0, revenue: 0, closes: 0 });
+  const overviewPaidForPayee = (name: string, roles: string[]) => [...(sheetData?.closers ?? []), ...(sheetData?.setters ?? []), ...(sheetData?.operators ?? [])].filter((person) => person.name === name && roles.includes(person.role)).reduce((sum, person) => sum + person.paid, 0);
   const earnedForPayee = (name: string, roles: string[]) => {
     if (name === "MoonRift Media") return period.cash * .15;
     if (name === "King") return period.dated.filter(({ deal }) => /king/i.test(`${deal.source} ${deal.campaign} ${deal.video}`)).reduce((sum, { deal }) => sum + deal.cash, 0) * .55;
     let earned = 0; if (roles.includes("Closer")) earned += period.dated.filter(({ deal }) => deal.closer.split(/\s*\/\s*/).includes(name)).reduce((sum, { deal }) => sum + deal.cash, 0) * .10;
     if (roles.includes("Setter")) earned += period.dated.filter(({ deal }) => deal.setter === name).reduce((sum, { deal }) => sum + deal.cash, 0) * .05;
+    if (roles.includes("Growth Operator")) {
+      const operator = sheetData?.operators.find((person) => person.role === "Growth Operator" && person.name === name);
+      earned += growthOperatorSales(name).cash * (operator?.commissionRate ?? 0);
+    }
     return earned;
   };
 
@@ -455,7 +514,7 @@ export function Dashboard() {
         {["Overview", "Closed Deals", "Payouts", "Media KPIs"].includes(tab) && <div className="filters"><div><label>Date range</label><select value={range} onChange={(e) => setRange(e.target.value)}><option>Last 7 days</option><option>Last 30 days</option><option>This quarter</option><option>Year to date</option><option>All time</option><option>Custom</option></select></div>{range === "Custom" && <><div><label>Start date</label><input type="date" value={customStart} max={customEnd} onChange={(e) => setCustomStart(e.target.value)} /></div><div><label>End date</label><input type="date" value={customEnd} min={customStart} onChange={(e) => setCustomEnd(e.target.value)} /></div></>}<button className="refresh-data" onClick={() => void refreshDashboard()} disabled={refreshing} aria-label="Refresh Google Sheets data">{refreshing ? "Refreshing…" : "↻ Refresh data"}</button><button className={`sheet-pill ${sheetStatus}`} disabled={clientId === agencyClient.id} onClick={() => { if (clientId === agencyClient.id) return; setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}><span>●</span>{sheetStatus === "loading" ? "Syncing…" : clientId === agencyClient.id && sheetStatus === "connected" ? `${agencySources.length} offer${agencySources.length === 1 ? "" : "s"} live` : sheetStatus === "connected" ? `Google Sheets live${sheetData ? ` · ${sheetData.updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}` : sheetStatus === "error" ? "Sheet error" : clientId === agencyClient.id ? "No connected offers" : "Connect sheet"}</button></div>}
 
         {tab === "Overview" && <>{clientId === agencyClient.id && <section className="agency-overview"><div className="agency-overview-head"><div><span>AGENCY PERFORMANCE</span><h2>Every offer in one clear view</h2></div><strong>{agencyOfferRows.filter((row) => row.connected).length} of {agencyOfferRows.length} connected</strong></div><div className="agency-offer-grid">{agencyOfferRows.map((row) => <button key={row.client.id} onClick={() => { setClientId(row.client.id); setActiveNav("Dashboard"); setTab("Overview"); }}><span className="agency-offer-avatar" style={{ background: row.client.color }}>{row.client.avatar ? <img src={row.client.avatar} alt="" /> : row.client.initials}</span><div><h3>{row.client.name}</h3><small>{row.connected ? `${range} performance` : "Connect a Google Sheet"}</small></div><dl><div><dt>Cash</dt><dd>{money(row.cash)}</dd></div><div><dt>Revenue</dt><dd>{money(row.revenue)}</dd></div><div><dt>Closed</dt><dd>{row.closed}</dd></div><div><dt>Show rate</dt><dd>{row.showRate.toFixed(1)}%</dd></div></dl><em>View offer →</em></button>)}</div></section>}<div className="charts"><Chart data={period.cashSeries} labels={period.labels} color="#8b6cff" fill="rgba(139,108,255,.28)" label="Cash collected by payment date" total={money(period.cash)} /><Chart data={period.revenueSeries} labels={period.labels} color="#38d6b6" fill="rgba(56,214,182,.22)" label="Revenue generated by payment date" total={money(period.revenue)} /></div>
-          {period.missing > 0 && <div className="data-warning">ⓘ {period.missing} closed {period.missing === 1 ? "deal is" : "deals are"} missing a Date Closed and excluded from date-range totals and charts.</div>}
+          {period.missing > 0 && <div className="data-warning" tabIndex={0}><span>ⓘ {period.missing} closed {period.missing === 1 ? "deal has" : "deals have"} a missing or invalid Date Closed and {period.missing === 1 ? "is" : "are"} excluded from date-range totals and charts.</span><strong>Hover or focus to view deals</strong><div className="missing-deals-popover" role="tooltip"><div><b>Deals needing a valid Date Closed</b><small>Check these rows in the connected Closed Deals tab.</small></div><ul>{period.missingDeals.map((deal) => <li key={`${deal.workspaceId}-${deal.sheetRow}-${deal.lead}`}><b>{deal.lead}</b><span>{deal.workspaceName || client.name} · row {deal.sheetRow} · {deal.email || deal.phone || "No contact detail"}{deal.date ? ` · current value: ${deal.date}` : ""}</span></li>)}</ul></div></div>}
           <div className="kpi-grid">{[
             ["Cash collected", money(period.cash), period.cash, period.previous.cash],
             ["Revenue generated", money(period.revenue), period.revenue, period.previous.revenue],
@@ -464,7 +523,7 @@ export function Dashboard() {
             ["Meetings booked", String(period.booked), period.booked, period.previous.booked],
             ["Meetings taken", String(period.taken), period.taken, period.previous.taken],
             ["Show rate", `${period.show.toFixed(2)}%`, period.show, period.previous.show],
-            ["Close rate", `${(period.taken ? period.closed / period.taken * 100 : 0).toFixed(2)}%`, period.taken ? period.closed / period.taken * 100 : 0, period.previous.taken ? period.previous.closed / period.previous.taken * 100 : 0],
+            ["Close rate", `${(period.taken ? period.meetingsClosed / period.taken * 100 : 0).toFixed(2)}%`, period.taken ? period.meetingsClosed / period.taken * 100 : 0, period.previous.taken ? period.previous.meetingsClosed / period.previous.taken * 100 : 0],
             ["Application → booking", `${(period.applications ? period.booked / period.applications * 100 : 0).toFixed(2)}%`, period.applications ? period.booked / period.applications * 100 : 0, period.previous.applications ? period.previous.booked / period.previous.applications * 100 : 0],
             ["Cash to revenue", `${(period.revenue ? period.cash / period.revenue * 100 : 0).toFixed(2)}%`, period.revenue ? period.cash / period.revenue * 100 : 0, period.previous.revenue ? period.previous.cash / period.previous.revenue * 100 : 0],
             ["Cash per closed deal", money(period.closed ? period.cash / period.closed : 0), period.closed ? period.cash / period.closed : 0, period.previous.closed ? period.previous.cash / period.previous.closed : 0],
@@ -474,9 +533,9 @@ export function Dashboard() {
           <div className="attribution-grid"><AttributionChart title="Cash collected by lead source" items={period.cashAttribution} color={["#8b6cff", "#38d6b6", "#ffad66", "#5aa7ff", "#ef6ea8"]} /><AttributionChart title="Revenue generated by lead source" items={period.revenueAttribution} color={["#38d6b6", "#8b6cff", "#5aa7ff", "#ffad66", "#ef6ea8"]} /></div>
           <div className="performance-grid"><PerformanceTable title="Closer" people={closerRows} range={range} /><PerformanceTable title="Setter" people={setters} range={range} /></div></>}
 
-        {tab === "Closed Deals" && <article className="table-card deals-card"><div className="section-head"><div><h2>Closed Deals</h2><p>Live from the Closed Deals tab in Google Sheets · {range}</p></div><strong>{period.dated.length} deals</strong></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Setter</th><th>Closer</th><th>Source</th><th>Specific ad / video</th><th>Paid through</th><th>Cash collected</th><th>Offer amount</th><th>Amount owed</th><th>Date closed</th><th>Next payment</th></tr></thead><tbody>{period.dated.map(({ deal }) => <tr key={`${deal.lead}-${deal.phone}`}><td><div><b>{deal.lead}</b><small>{deal.email || deal.phone}</small></div></td><td>{deal.setter}</td><td>{deal.closer}</td><td>{deal.source}</td><td>{deal.video || deal.campaign || "—"}</td><td>{deal.method}</td><td>{money(deal.cash)}</td><td>{money(deal.offer)}</td><td>{money(deal.owed)}</td><td>{deal.date || <span className="missing-date">Missing date</span>}</td><td>{deal.next || "—"}</td></tr>)}</tbody></table></div></article>}
+        {tab === "Closed Deals" && <article className="table-card deals-card"><div className="section-head"><div><h2>Closed Deals</h2><p>Live from the Closed Deals tab in Google Sheets · {range}</p></div><strong>{period.dated.length} deals</strong></div><div className="table-wrap"><table><thead><tr><th>Lead</th><th>Setter</th><th>Closer</th><th>Growth operator</th><th>Source</th><th>Specific ad / video</th><th>Paid through</th><th>Cash collected</th><th>Offer amount</th><th>Amount owed</th><th>Date closed</th><th>Next payment</th></tr></thead><tbody>{period.dated.map(({ deal }) => <tr key={`${deal.workspaceId}-${deal.sheetRow}-${deal.lead}`}><td><div><b>{deal.lead}</b><small>{deal.email || deal.phone}</small></div></td><td>{deal.setter}</td><td>{deal.closer}</td><td>{deal.growthOperator || "—"}</td><td>{deal.source}</td><td>{deal.video || deal.campaign || "—"}</td><td>{deal.method}</td><td>{money(deal.cash)}</td><td>{money(deal.offer)}</td><td>{money(deal.owed)}</td><td>{deal.date || <span className="missing-date">Missing date</span>}</td><td>{deal.next || "—"}</td></tr>)}</tbody></table></div></article>}
 
-        {tab === "Payouts" && <><div className="payout-head"><div><h2>Team, operator & ownership payouts</h2><p>Paid history is read directly from the Google Sheets Payouts tab.</p></div>{clientId !== agencyClient.id && <button onClick={() => { setPayoutMember(payoutPeople[0]?.key ?? ""); setModal("payout"); }}>＋ Add payout</button>}</div><div className="payout-grid">{payoutPeople.map((p) => { const inRange = filteredPayouts.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const allPaid = payoutHistory.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const earned = earnedForPayee(p.name, p.roles); return <article className="payout-card" key={p.key}><div><span className="person p0">{initials(p.name)}</span><h3>{p.name}<small>{p.roles.join(" · ")}</small></h3></div><dl><div><dt>Earned in selected range</dt><dd>{money(earned)}</dd></div><div><dt>Paid in selected range</dt><dd>{money(inRange)}</dd></div><div><dt>Paid out (all time)</dt><dd>{money(allPaid)}</dd></div><div><dt>Remaining for range</dt><dd>{money(Math.max(0, earned - inRange))}</dd></div></dl></article>; })}</div><article className="table-card"><div className="section-head"><div><h2>Payout history</h2><p>{range} · {filteredPayouts.length} records from Google Sheets</p></div></div><div className="table-wrap"><table><thead><tr><th>Payee</th><th>Role</th><th>Day</th><th>Method</th><th>Amount</th><th></th></tr></thead><tbody>{filteredPayouts.map((p) => <tr key={`${p.workspaceId}-${p.id}`}><td><b>{p.member.split(":").at(-1)}</b></td><td>{p.member.includes(":") ? p.member.split(":")[0] : "Unassigned"}</td><td>{p.date || "No date"}</td><td>{p.method || "—"}</td><td>{money(p.amount)}</td><td>{clientId !== agencyClient.id && <button className="delete-payout" onClick={() => void deletePayout(p)} aria-label={`Delete payout for ${p.member}`}>Delete</button>}</td></tr>)}{!filteredPayouts.length && <tr><td colSpan={6}>No payouts in this date range.</td></tr>}</tbody></table></div></article></>}
+        {tab === "Payouts" && <><div className="payout-head"><div><h2>Team, operator & ownership payouts</h2><p>Commission comes from System Overview; dated payment history comes from the Payouts tab when available.</p></div>{clientId !== agencyClient.id && <button onClick={() => { setPayoutMember(payoutPeople[0]?.key ?? ""); setModal("payout"); }}>＋ Add payout</button>}</div><div className="payout-grid">{payoutPeople.map((p) => { const datedPaid = filteredPayouts.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const historyPaid = payoutHistory.filter((x) => x.member.split(":").at(-1) === p.name).reduce((sum, x) => sum + x.amount, 0); const sheetPaid = overviewPaidForPayee(p.name, p.roles); const allPaid = historyPaid || sheetPaid; const inRange = range === "All time" && !historyPaid ? sheetPaid : datedPaid; const earned = earnedForPayee(p.name, p.roles); const operatorSales = p.roles.includes("Growth Operator") ? growthOperatorSales(p.name) : null; return <article className="payout-card" key={p.key}><div><span className="person p0">{initials(p.name)}</span><h3>{p.name}<small>{p.roles.join(" · ")}</small></h3></div><dl>{operatorSales && <><div><dt>Attributed cash</dt><dd>{money(operatorSales.cash)}</dd></div><div><dt>Attributed revenue</dt><dd>{money(operatorSales.revenue)}</dd></div><div><dt>Attributed closes</dt><dd>{operatorSales.closes}</dd></div></>}<div><dt>Earned in selected range</dt><dd>{money(earned)}</dd></div><div><dt>Paid in selected range</dt><dd>{money(inRange)}</dd></div><div><dt>Paid out (all time)</dt><dd>{money(allPaid)}</dd></div><div><dt>Remaining for range</dt><dd>{money(Math.max(0, earned - inRange))}</dd></div></dl></article>; })}</div><article className="table-card"><div className="section-head"><div><h2>Payout history</h2><p>{range} · {filteredPayouts.length} dated records</p></div></div><div className="table-wrap"><table><thead><tr><th>Payee</th><th>Role</th><th>Day</th><th>Method</th><th>Amount</th><th></th></tr></thead><tbody>{filteredPayouts.map((p) => <tr key={`${p.workspaceId}-${p.id}`}><td><b>{p.member.split(":").at(-1)}</b></td><td>{p.member.includes(":") ? p.member.split(":")[0] : "Unassigned"}</td><td>{p.date || "No date"}</td><td>{p.method || "—"}</td><td>{money(p.amount)}</td><td>{clientId !== agencyClient.id && <button className="delete-payout" onClick={() => void deletePayout(p)} aria-label={`Delete payout for ${p.member}`}>Delete</button>}</td></tr>)}{!filteredPayouts.length && <tr><td colSpan={6}>No dated payouts in this range.</td></tr>}</tbody></table></div></article></>}
         {tab === "Media KPIs" && <><div className="metrics-section media-summary"><div className="metrics-title"><div><span>MEDIA KPIs</span><h2>Specific ad and video performance</h2></div>{!metaConnected && <button onClick={() => setModal("meta")}>Connect Meta Ads for spend</button>}</div><div className="paid-grid"><article><span>Appointments</span><strong>{mediaRows.reduce((sum, row) => sum + row.appointments, 0)}</strong></article><article><span>Meetings taken</span><strong>{mediaRows.reduce((sum, row) => sum + row.meetings, 0)}</strong></article><article><span>Closed deals</span><strong>{mediaRows.reduce((sum, row) => sum + row.closes, 0)}</strong></article><article><span>Ad spend</span><strong>{metaConnected ? money(adSpend) : "—"}</strong></article></div></div><article className="table-card"><div className="section-head"><div><h2>Creative performance</h2><p>Bookings from Booked Calls; revenue and cash from Closed Deals attribution.</p></div></div><div className="table-wrap"><table><thead><tr><th>Specific ad / video</th><th>Source</th><th>Appointments</th><th>Meetings</th><th>Closes</th><th>Close rate</th><th>Cash collected</th><th>Revenue</th><th>Spend</th><th>CRM ROAS</th></tr></thead><tbody>{mediaRows.map((row) => <tr key={row.label}><td><b>{row.label}</b></td><td>{row.source || "—"}</td><td>{row.appointments}</td><td>{row.meetings}</td><td>{row.closes}</td><td><span className="rate">{row.meetings ? (row.closes / row.meetings * 100).toFixed(1) : 0}%</span></td><td>{money(row.cash)}</td><td>{money(row.revenue)}</td><td>{metaConnected ? money(row.spend) : "—"}</td><td>{row.spend ? `${(row.revenue / row.spend).toFixed(2)}×` : "—"}</td></tr>)}{!mediaRows.length && <tr><td colSpan={10}>No attributed media activity in this range.</td></tr>}</tbody></table></div></article></>}
         {tab === "Data Sources" && <div className="source-grid"><article><span className={`source-icon ${sheetStatus}`}>▦</span><div><h2>Google Sheets</h2><p>Sales CRM, Closed Deals, Payouts, Booked Calls, applications, and attribution.</p><small>{clientId === agencyClient.id ? `${agencySources.length} connected offer${agencySources.length === 1 ? "" : "s"}` : sheetStatus === "connected" ? "Connected and syncing" : "Not connected"}</small></div><button onClick={() => { if (clientId === agencyClient.id) { notify("Select an offer to manage its Google Sheet"); return; } setSheetUrl(sheetUrls[clientId] ?? ""); setModal("sheet"); }}>{clientId === agencyClient.id ? "Select offer" : sheetStatus === "connected" ? "Manage" : "Connect"}</button></article><article><span className={`source-icon ${metaConnected ? "connected" : ""}`}>f</span><div><h2>Meta Ads</h2><p>Daily spend, ad names, clicks, and impressions for CRM-calculated ROAS.</p><small>{metaConnected ? `Connected${metaAccount ? ` · ${metaAccount}` : ""}` : "Not connected"}</small></div><button onClick={() => { if (clientId === agencyClient.id) { notify("Select an offer to manage its Meta ad account"); return; } setModal("meta"); }}>{clientId === agencyClient.id ? "Select offer" : metaConnected ? "Reconnect" : "Connect"}</button></article></div>}
         {tab === "Users" && <article className="users-panel"><div><span>♙</span><h2>Subaccount access</h2><p>Each user signs in with their own ChatGPT account. Workspace access and account switching remain isolated by the agency access list—there are no shared dashboard passwords.</p></div><button onClick={() => setModal("member")}>＋ Invite workspace user</button><div className="user-row"><span>PP</span><div><b>Peter Phan</b><small>peterphan441@gmail.com</small></div><em>Agency owner</em></div><div className="access-note">Workspace deletion is still available under <strong>Settings → Delete workspace</strong>. The workspace switcher in the upper-left is the agency subaccount view.</div></article>}

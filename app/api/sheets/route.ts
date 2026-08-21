@@ -1,4 +1,4 @@
-const ALLOWED_SHEETS = new Set(["System Overview", "Sales CRM", "Closed Deals", "Events", "Payouts", "Booked Calls"]);
+const ALLOWED_SHEETS = new Set(["System Overview", "Applications", "Sales CRM", "Closed Deals", "Events", "Payouts", "Booked Calls"]);
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
