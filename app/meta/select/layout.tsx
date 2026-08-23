@@ -1,12 +1,11 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getAuthenticatedUser } from "@/lib/auth";
-import { Dashboard } from "./dashboard";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
+export default async function MetaSelectLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const user = await getAuthenticatedUser(await headers());
   if (!user) redirect("/login");
-  return <Dashboard user={user} />;
+  return children;
 }

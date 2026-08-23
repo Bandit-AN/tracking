@@ -1,3 +1,4 @@
+import { canAccessWorkspace, canEdit, forbiddenResponse, getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
 import { metaConfig } from "@/lib/meta-oauth";
 import { deleteMetaConnection, getMetaConnection, saveMetaConnection } from "@/lib/meta-store";
 
@@ -18,7 +19,8 @@ async function insights(adAccountId: string, accessToken: string, since: string,
 }
 
 export async function GET(request: Request) {
-  const url = new URL(request.url); const workspaceId = Number(url.searchParams.get("workspaceId") || 1); const saved = await getMetaConnection(workspaceId);
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse();
+  const url = new URL(request.url); const workspaceId = Number(url.searchParams.get("workspaceId") || 1); if (!canAccessWorkspace(user, workspaceId)) return forbiddenResponse(); const saved = await getMetaConnection(workspaceId);
   if (!saved) return Response.json({ connected: false, insights: [] });
   const until = url.searchParams.get("until") || new Date().toISOString().slice(0, 10); const since = url.searchParams.get("since") || until;
   try { const result = await insights(saved.adAccountId, saved.accessToken, since, until); return Response.json({ connected: true, adAccountId: `act_${saved.adAccountId}`, insights: result.data ?? [] }); }
@@ -28,14 +30,16 @@ export async function GET(request: Request) {
 // Kept for backwards compatibility with existing private connections. New
 // connections use the browser-based OAuth flow under /api/meta/oauth/start.
 export async function POST(request: Request) {
-  const body = await request.json() as { workspaceId: number; adAccountId: string; accessToken: string }; const account = body.adAccountId?.replace(/^act_/, "").trim();
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
+  const body = await request.json() as { workspaceId: number; adAccountId: string; accessToken: string }; if (!canAccessWorkspace(user, body.workspaceId)) return forbiddenResponse(); const account = body.adAccountId?.replace(/^act_/, "").trim();
   if (!body.workspaceId || !account || !body.accessToken) return Response.json({ error: "Missing Meta connection details" }, { status: 400 });
   const today = new Date().toISOString().slice(0, 10); try { await insights(account, body.accessToken, today, today); } catch { return Response.json({ error: "Meta could not verify that account and token" }, { status: 400 }); }
   await saveMetaConnection(body.workspaceId, account, body.accessToken); return Response.json({ ok: true, connected: true });
 }
 
 export async function DELETE(request: Request) {
-  const workspaceId = Number(new URL(request.url).searchParams.get("workspaceId") || 0);
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
+  const workspaceId = Number(new URL(request.url).searchParams.get("workspaceId") || 0); if (!canAccessWorkspace(user, workspaceId)) return forbiddenResponse();
   if (!Number.isSafeInteger(workspaceId) || workspaceId < 1) return Response.json({ error: "Invalid workspace" }, { status: 400 });
   await deleteMetaConnection(workspaceId); return Response.json({ ok: true });
 }

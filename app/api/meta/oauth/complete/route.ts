@@ -1,3 +1,4 @@
+import { canAccessWorkspace, canEdit, forbiddenResponse, getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
 import { META_OAUTH_COOKIE, oauthCookie, readCookie } from "@/lib/meta-oauth";
 import { deleteMetaOauthSession, getMetaOauthSession, saveMetaConnection } from "@/lib/meta-store";
 
@@ -8,14 +9,18 @@ async function validSession(request: Request, flowId: string) {
 }
 
 export async function GET(request: Request) {
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
   const flowId = new URL(request.url).searchParams.get("flow") ?? ""; const session = await validSession(request, flowId);
   if (!session) return Response.json({ error: "This Meta connection session expired. Please start again." }, { status: 410 });
+  if (!canAccessWorkspace(user, session.workspaceId)) return forbiddenResponse();
   return Response.json({ accounts: session.accounts.map(({ id, name, account_status, currency, timezone_name }) => ({ id, name, account_status, currency, timezone_name })) }, { headers: { "cache-control": "no-store" } });
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
   const body = await request.json() as { flow?: string; adAccountId?: string }; const session = await validSession(request, body.flow ?? "");
   if (!session) return Response.json({ error: "This Meta connection session expired. Please start again." }, { status: 410 });
+  if (!canAccessWorkspace(user, session.workspaceId)) return forbiddenResponse();
   const account = session.accounts.find((item) => item.id === body.adAccountId);
   if (!account) return Response.json({ error: "Choose one of the authorized ad accounts." }, { status: 400 });
 

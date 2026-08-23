@@ -1,12 +1,17 @@
+import { canAccessWorkspace, canEdit, getAuthenticatedUser } from "@/lib/auth";
 import { callbackUrl, exchangeOauthCode, fetchMetaAdAccounts, homeRedirect, META_OAUTH_COOKIE, metaConfig, oauthCookie, randomToken, readCookie, verifyOauthState } from "@/lib/meta-oauth";
 import { createMetaOauthSession, saveMetaConnection } from "@/lib/meta-store";
 
 export async function GET(request: Request) {
+  const user = await getAuthenticatedUser(request.headers);
+  if (!user) return Response.redirect(new URL("/login", request.url), 302);
+  if (!canEdit(user)) return Response.redirect(homeRedirect(request, "error", "forbidden"), 302);
   const url = new URL(request.url); const { appSecret } = metaConfig();
   if (url.searchParams.get("error")) return Response.redirect(homeRedirect(request, "cancelled"), 302);
   const code = url.searchParams.get("code") ?? ""; const state = url.searchParams.get("state") ?? "";
   const verified = appSecret ? await verifyOauthState(state, appSecret) : null; const cookieNonce = readCookie(request, META_OAUTH_COOKIE);
   if (!code || !verified || !cookieNonce || verified.browserNonce !== cookieNonce) return Response.redirect(homeRedirect(request, "error", "invalid_state"), 302);
+  if (!canAccessWorkspace(user, verified.workspaceId)) return Response.redirect(homeRedirect(request, "error", "forbidden"), 302);
 
   try {
     const token = await exchangeOauthCode(code, callbackUrl(request)); const accounts = await fetchMetaAdAccounts(token.access_token!);

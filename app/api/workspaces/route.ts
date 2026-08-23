@@ -1,3 +1,5 @@
+import { canAccessWorkspace, canEdit, forbiddenResponse, getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+
 type Binding = { prepare: (query: string) => { bind: (...args: unknown[]) => { run: () => Promise<unknown>; all: () => Promise<{ results?: unknown[] }> } } };
 type RuntimeEnv = { DB?: Binding; DATABASE_URL?: string; GOOGLE_SHEETS_PAYOUT_WEBHOOK_URL?: string };
 
@@ -37,17 +39,19 @@ async function syncWebhook(runtime: RuntimeEnv, payload: Record<string, unknown>
 }
 
 export async function GET(request: Request) {
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse();
   const runtime = await runtimeEnv(); const url = new URL(request.url); const all = url.searchParams.get("all") === "true"; const id = Number(url.searchParams.get("workspaceId") || 1);
+  if (!all && !canAccessWorkspace(user, id)) return forbiddenResponse();
   if (runtime.DATABASE_URL) {
     const sql = await neonSql(runtime.DATABASE_URL);
-    if (all) return Response.json({ workspaces: await sql.query("SELECT id,name,avatar,industry,initials,color,sheet_url AS \"sheetUrl\" FROM workspaces ORDER BY id") });
+    if (all) { const workspaces = await sql.query("SELECT id,name,avatar,industry,initials,color,sheet_url AS \"sheetUrl\" FROM workspaces ORDER BY id") as Array<{ id: number | string }>; return Response.json({ workspaces: user.workspaceIds === "all" ? workspaces : workspaces.filter((workspace) => canAccessWorkspace(user, Number(workspace.id))) }); }
     const workspace = await sql.query("SELECT name,avatar,industry,initials,color,sheet_url AS \"sheetUrl\" FROM workspaces WHERE id=$1", [id]);
     const payouts = await sql.query("SELECT id,workspace_id AS \"workspaceId\",member,date,method,amount FROM payouts WHERE workspace_id=$1 ORDER BY date DESC,id DESC", [id]);
     return Response.json({ workspace: workspace[0] ?? null, payouts });
   }
   if (runtime.DB) {
     await setupD1(runtime.DB);
-    if (all) return Response.json({ workspaces: (await runtime.DB.prepare("SELECT id,name,avatar,industry,initials,color,sheet_url as sheetUrl FROM workspaces ORDER BY id").bind().all()).results ?? [] });
+    if (all) { const workspaces = (await runtime.DB.prepare("SELECT id,name,avatar,industry,initials,color,sheet_url as sheetUrl FROM workspaces ORDER BY id").bind().all()).results ?? []; return Response.json({ workspaces: user.workspaceIds === "all" ? workspaces : workspaces.filter((workspace) => canAccessWorkspace(user, Number((workspace as { id?: unknown }).id))) }); }
     const workspace = await runtime.DB.prepare("SELECT name,avatar,industry,initials,color,sheet_url as sheetUrl FROM workspaces WHERE id=?").bind(id).all();
     const payouts = await runtime.DB.prepare("SELECT id,workspace_id as workspaceId,member,date,method,amount FROM payouts WHERE workspace_id=? ORDER BY date DESC,id DESC").bind(id).all();
     return Response.json({ workspace: workspace.results?.[0] ?? null, payouts: payouts.results ?? [] });
@@ -56,7 +60,9 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
   const runtime = await runtimeEnv(); const body = await request.json() as { workspaceId: number; name: string; avatar?: string; industry?: string; initials?: string; color?: string; sheetUrl?: string };
+  if (!canAccessWorkspace(user, body.workspaceId)) return forbiddenResponse();
   const values = [body.workspaceId, body.name, body.avatar || "", body.industry || "Sales workspace", body.initials || "", body.color || "#7646ff", body.sheetUrl || ""] as const;
   if (runtime.DATABASE_URL) { const sql = await neonSql(runtime.DATABASE_URL); await sql.query("INSERT INTO workspaces (id,name,avatar,industry,initials,color,sheet_url) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,avatar=EXCLUDED.avatar,industry=EXCLUDED.industry,initials=EXCLUDED.initials,color=EXCLUDED.color,sheet_url=EXCLUDED.sheet_url,updated_at=NOW()", [...values]); return Response.json({ ok: true }); }
   if (runtime.DB) { await setupD1(runtime.DB); await runtime.DB.prepare("INSERT INTO workspaces (id,name,avatar,industry,initials,color,sheet_url,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,avatar=excluded.avatar,industry=excluded.industry,initials=excluded.initials,color=excluded.color,sheet_url=excluded.sheet_url,updated_at=excluded.updated_at").bind(...values, new Date().toISOString()).run(); return Response.json({ ok: true }); }
@@ -64,11 +70,15 @@ export async function PATCH(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
   const runtime = await runtimeEnv(); const body = await request.json() as { kind?: string; id: number; workspaceId: number; name?: string; member?: string; date?: string; method?: string; amount?: number; industry?: string; initials?: string; color?: string; sheetUrl?: string };
   if (body.kind === "workspace") {
+    if (user.role !== "admin") return forbiddenResponse();
     const workspace = { workspaceId: body.id, name: body.name || "New workspace", industry: body.industry, initials: body.initials, color: body.color, sheetUrl: body.sheetUrl };
-    return PATCH(new Request(request.url, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(workspace) }));
+    const forwardedHeaders = new Headers(request.headers); forwardedHeaders.set("content-type", "application/json");
+    return PATCH(new Request(request.url, { method: "PATCH", headers: forwardedHeaders, body: JSON.stringify(workspace) }));
   }
+  if (!canAccessWorkspace(user, body.workspaceId)) return forbiddenResponse();
   if (!body.member || !body.date || !body.method || !body.amount) return Response.json({ error: "Invalid payout" }, { status: 400 });
   if (runtime.DATABASE_URL) { const sql = await neonSql(runtime.DATABASE_URL); await sql.query("INSERT INTO payouts (id,workspace_id,member,date,method,amount) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(id) DO UPDATE SET member=EXCLUDED.member,date=EXCLUDED.date,method=EXCLUDED.method,amount=EXCLUDED.amount", [body.id, body.workspaceId, body.member, body.date, body.method, body.amount]); }
   else if (runtime.DB) { await setupD1(runtime.DB); await runtime.DB.prepare("INSERT OR REPLACE INTO payouts (id,workspace_id,member,date,method,amount,created_at) VALUES (?,?,?,?,?,?,?)").bind(body.id,body.workspaceId,body.member,body.date,body.method,body.amount,new Date().toISOString()).run(); }
@@ -78,7 +88,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const user = await getAuthenticatedUser(request.headers); if (!user) return unauthorizedResponse(); if (!canEdit(user)) return forbiddenResponse();
   const runtime = await runtimeEnv(); const url = new URL(request.url); const workspaceId = Number(url.searchParams.get("workspaceId")); const payoutId = Number(url.searchParams.get("payoutId"));
+  if (!canAccessWorkspace(user, workspaceId) || (!payoutId && user.role !== "admin")) return forbiddenResponse();
   if (runtime.DATABASE_URL) { const sql = await neonSql(runtime.DATABASE_URL); if (payoutId) await sql.query("DELETE FROM payouts WHERE id=$1 AND workspace_id=$2",[payoutId,workspaceId]); else { await sql.query("DELETE FROM payouts WHERE workspace_id=$1",[workspaceId]); await sql.query("DELETE FROM workspaces WHERE id=$1",[workspaceId]); } }
   else if (runtime.DB) { await setupD1(runtime.DB); if (payoutId) await runtime.DB.prepare("DELETE FROM payouts WHERE id=? AND workspace_id=?").bind(payoutId,workspaceId).run(); else { await runtime.DB.prepare("DELETE FROM payouts WHERE workspace_id=?").bind(workspaceId).run(); await runtime.DB.prepare("DELETE FROM workspaces WHERE id=?").bind(workspaceId).run(); } }
   const sheetSynced = payoutId ? await syncWebhook(runtime,{action:"delete",id:payoutId}) : false;

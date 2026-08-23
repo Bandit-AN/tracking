@@ -1,11 +1,16 @@
+import { canAccessWorkspace, canEdit, forbiddenResponse, getAuthenticatedUser } from "@/lib/auth";
 import { callbackUrl, createOauthState, homeRedirect, metaConfig, oauthCookie, randomToken } from "@/lib/meta-oauth";
 
 export async function GET(request: Request) {
+  const user = await getAuthenticatedUser(request.headers);
+  if (!user) return Response.redirect(new URL("/login", request.url), 302);
+  if (!canEdit(user)) return forbiddenResponse();
   const { appId, appSecret, configurationId, version } = metaConfig();
   if (!appId || !appSecret) return Response.redirect(homeRedirect(request, "setup_required"), 302);
 
   const requestUrl = new URL(request.url); const workspaceId = Number(requestUrl.searchParams.get("workspaceId") || 1);
   if (!Number.isSafeInteger(workspaceId) || workspaceId < 1) return Response.json({ error: "Invalid workspace" }, { status: 400 });
+  if (!canAccessWorkspace(user, workspaceId)) return forbiddenResponse();
 
   const browserNonce = randomToken(); const redirectUri = callbackUrl(request); const state = await createOauthState(workspaceId, browserNonce, appSecret);
   const params = new URLSearchParams({ client_id: appId, redirect_uri: redirectUri, response_type: "code", state });

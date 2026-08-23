@@ -1,6 +1,9 @@
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth";
+
 const ALLOWED_SHEETS = new Set(["System Overview", "Applications", "Sales CRM", "Closed Deals", "Events", "Payouts", "Booked Calls"]);
 
 export async function GET(request: Request) {
+  if (!(await getAuthenticatedUser(request.headers))) return unauthorizedResponse();
   const url = new URL(request.url);
   const spreadsheetId = url.searchParams.get("spreadsheetId") ?? "";
   const sheet = url.searchParams.get("sheet") ?? "System Overview";
