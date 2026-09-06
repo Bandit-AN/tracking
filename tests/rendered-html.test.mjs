@@ -24,7 +24,7 @@ async function request(path = "/", init = {}, env = {}) {
 test("server-renders the MoonRift dashboard shell", async () => {
   const response = await request("/", { headers: { "oai-authenticated-user-email": "peterphan441@gmail.com" } }); assert.equal(response.status, 200); assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>MoonRift/); assert.match(html, />MoonRift</); assert.match(html, />Dashboard</); assert.match(html, /Refresh data/); assert.match(html, /PAID AD METRICS/); assert.match(html, /WHOP ADS METRICS/); assert.match(html, /Connect Whop Ads/); assert.match(html, /Cash collected by lead source/); assert.match(html, /Message MoonRift Media/);
+  assert.match(html, /<title>MoonRift/); assert.match(html, />MoonRift</); assert.match(html, />Dashboard</); assert.match(html, /Refresh data/); assert.match(html, /Month to date/); assert.match(html, /Quarter to date/); assert.match(html, /Year to date/); assert.match(html, /PAID AD METRICS/); assert.match(html, /WHOP ADS METRICS/); assert.match(html, /Connect Whop Ads/); assert.match(html, /Cash collected by lead source/); assert.match(html, /Message MoonRift Media/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|Building your site/i);
 });
 
