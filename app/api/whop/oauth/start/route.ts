@@ -8,6 +8,6 @@ export async function GET(request: Request) {
   const workspaceId = Number(new URL(request.url).searchParams.get("workspaceId") || 1); if (!Number.isSafeInteger(workspaceId) || workspaceId < 1 || !canAccessWorkspace(user, workspaceId)) return forbiddenResponse();
   const browserNonce = randomWhopToken(); const verifier = randomWhopToken(48); const flowId = randomWhopToken(); const state = await createWhopState(workspaceId, browserNonce, config.tokenSecret);
   await saveWhopOauthSession({ id: flowId, workspaceId, browserNonce, codeVerifier: verifier, expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() });
-  const params = new URLSearchParams({ client_id: config.appId, redirect_uri: whopCallbackUrl(request), response_type: "code", scope: "openid profile email ad_campaign:basic:read", state: `${state}.${flowId}`, code_challenge: await whopPkceChallenge(verifier), code_challenge_method: "S256" });
-  const response = Response.redirect(`https://api.whop.com/oauth/authorize?${params}`, 302); response.headers.append("set-cookie", whopOauthCookie(browserNonce, request)); response.headers.set("cache-control", "no-store"); return response;
+  const params = new URLSearchParams({ client_id: config.appId, redirect_uri: whopCallbackUrl(request), response_type: "code", scope: "openid profile email stats:read", state: `${state}.${flowId}`, code_challenge: await whopPkceChallenge(verifier), code_challenge_method: "S256" });
+  return new Response(null, { status: 302, headers: { location: `https://api.whop.com/oauth/authorize?${params}`, "set-cookie": whopOauthCookie(browserNonce, request), "cache-control": "no-store" } });
 }
