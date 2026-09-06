@@ -8,6 +8,20 @@
       "when": 1787193898372,
       "tag": "0000_wide_lord_tyger",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788661234518,
+      "tag": "0001_bouncy_gideon",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788661730703,
+      "tag": "0002_strange_stone_men",
+      "breakpoints": true
     }
   ]
 }
