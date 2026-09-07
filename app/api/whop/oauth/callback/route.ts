@@ -4,7 +4,7 @@ import { getWhopOauthSession, saveWhopConnection, saveWhopOauthSession } from "@
 
 export async function GET(request: Request) {
   const user = await getAuthenticatedUser(request.headers); if (!user) return Response.redirect(new URL("/login", request.url), 302); if (!canEdit(user)) return Response.redirect(whopHomeRedirect(request, "error", "forbidden"), 302);
-  const url = new URL(request.url); if (url.searchParams.get("error")) return Response.redirect(whopHomeRedirect(request, "cancelled"), 302);
+  const url = new URL(request.url); const oauthError = url.searchParams.get("error"); if (oauthError) { const reason = ["access_denied", "invalid_client", "invalid_request", "invalid_scope", "insufficient_scope"].includes(oauthError) ? oauthError : "oauth_rejected"; console.warn("Whop OAuth authorization rejected", reason); return Response.redirect(whopHomeRedirect(request, reason === "access_denied" ? "cancelled" : "error", reason), 302); }
   const code = url.searchParams.get("code") ?? ""; const combinedState = url.searchParams.get("state") ?? ""; const parts = combinedState.split("."); const flowId = parts.pop() ?? ""; const signedState = parts.join(".");
   const config = whopConfig(); const verified = config.tokenSecret ? await verifyWhopState(signedState, config.tokenSecret) : null; const session = await getWhopOauthSession(flowId); const cookieNonce = readWhopCookie(request);
   if (!code || !verified || !session || !cookieNonce || verified.browserNonce !== cookieNonce || session.browserNonce !== cookieNonce || session.workspaceId !== verified.workspaceId) return Response.redirect(whopHomeRedirect(request, "error", "invalid_state"), 302);

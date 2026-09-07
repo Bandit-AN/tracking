@@ -331,7 +331,7 @@ export function Dashboard({ user }: { user: AuthUser }) {
       if (whopResult === "connected") notify("Whop Ads connected successfully");
       else if (whopResult === "cancelled") notify("Whop connection cancelled");
       else if (whopResult === "setup_required") notify("Whop OAuth needs the MoonRift app credentials");
-      else if (whopResult) notify(params.get("reason") === "no_accounts" ? "No accessible Whop business accounts were found" : "Whop Ads could not be connected");
+      else if (whopResult) { const reason = params.get("reason"); notify(reason === "no_accounts" ? "No accessible Whop business accounts were found" : reason === "invalid_scope" || reason === "insufficient_scope" ? "Whop OAuth scopes need to be saved and re-approved" : reason === "invalid_client" ? "The Whop App ID is not valid" : reason === "invalid_request" ? "Whop rejected the OAuth setup or redirect URL" : "Whop Ads could not be connected"); }
       else if (metaResult === "connected") notify("Meta Ads connected successfully");
       else if (metaResult === "cancelled") notify("Meta connection cancelled");
       else if (metaResult === "setup_required") notify("Meta OAuth needs the MoonRift app credentials");
